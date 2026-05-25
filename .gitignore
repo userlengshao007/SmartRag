@@ -50,6 +50,7 @@ coverage
 
 /cypress/videos/
 /cypress/screenshots/
+frontend/test-results/
 
 # Editor directories and files
 frontend/.vscode/*
