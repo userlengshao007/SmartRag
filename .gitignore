@@ -72,6 +72,11 @@ frontend/src/typings/components.d.ts
 frontend/src/typings/auto-imports.d.ts
 frontend/public/languages
 frontend/public/themes
+CLAUDE.md
+*.bak
+src/main/java/com/zzzzyj/smartpai/test/
+src/test/java/com/zzzzyj/smartpai/test/MilvusDemo.java
+src/test/java/com/zzzzyj/smartpai/test/Singleton.java
 src/main/resources/application.yml~
 frontend/paicoding.pem
 frontend/AutoClaw.pem
