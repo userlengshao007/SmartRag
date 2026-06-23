@@ -56,6 +56,7 @@ public class ChatHandler {
     private final ChatGenerationStateService chatGenerationStateService;
     private final ChatSessionRegistry chatSessionRegistry;
     private final AgentToolRegistry agentToolRegistry;
+    private final ReActContextCompressor reActContextCompressor;
     private final ThreadPoolTaskExecutor chatMonitorExecutor;
     private final ObjectMapper objectMapper;
     
@@ -80,6 +81,7 @@ public class ChatHandler {
                       ChatGenerationStateService chatGenerationStateService,
                       ChatSessionRegistry chatSessionRegistry,
                       AgentToolRegistry agentToolRegistry,
+                      ReActContextCompressor reActContextCompressor,
                       ObjectMapper objectMapper,
                       @Qualifier("chatMonitorExecutor") ThreadPoolTaskExecutor chatMonitorExecutor) {
         this.redisTemplate = redisTemplate;
@@ -90,6 +92,7 @@ public class ChatHandler {
         this.chatGenerationStateService = chatGenerationStateService;
         this.chatSessionRegistry = chatSessionRegistry;
         this.agentToolRegistry = agentToolRegistry;
+        this.reActContextCompressor = reActContextCompressor;
         this.objectMapper = objectMapper;
         this.chatMonitorExecutor = chatMonitorExecutor;
     }
@@ -199,6 +202,7 @@ public class ChatHandler {
         int executedToolCalls = 0; // 已执行的工具调用次数
         int totalPromptTokens = 0; // 总输入Token数
         int totalCompletionTokens = 0; // 总输出Token数
+        List<AgentToolRegistry.AgentTool> tools = agentToolRegistry.getTools();
 
         // 最多循环4轮
         for (int round = 1; round <= MAX_REACT_ROUNDS; round++) {
@@ -206,9 +210,11 @@ public class ChatHandler {
                 return;
             }
 
+            compactReActContextIfNeeded(userId, generationId, conversationId, messages, tools);
+
             // 调用 LLM 获取一轮回复
             LlmProviderRouter.ReActTurn turn = streamReActTurnBlocking(
-                    userId, conversationId, generationId, messages, agentToolRegistry.getTools());
+                    userId, conversationId, generationId, messages, tools);
             if (turn == null) {
                 // 上游 stream 被取消（如用户点 stop），保证内存映射被回收
                 cleanupGenerationState(generationId, null);
@@ -266,6 +272,7 @@ public class ChatHandler {
                 "role", "user",
                 "content", "ReAct 轮次预算已用尽，请不要再调用工具，直接基于已有 tool 结果给出最终回答。"
         ));
+        compactReActContextIfNeeded(userId, generationId, conversationId, messages, List.of());
         LlmProviderRouter.ReActTurn finalTurn = streamReActTurnBlocking(
                 userId, conversationId, generationId, messages, List.of());
         if (finalTurn == null) {
@@ -277,6 +284,19 @@ public class ChatHandler {
         finalizeResponse(userId, userMessage, conversationId, generationId, responseFuture,
                 responseBuilders.get(generationId),
                 new LlmProviderRouter.StreamCompletion(finalTurn.finishReason(), totalPromptTokens, totalCompletionTokens, finalTurn.content().length()));
+    }
+
+    private void compactReActContextIfNeeded(String userId,
+                                             String generationId,
+                                             String conversationId,
+                                             List<Map<String, Object>> messages,
+                                             List<AgentToolRegistry.AgentTool> tools) {
+        ReActContextCompressor.CompressionResult result =
+                reActContextCompressor.compressIfNeeded(userId, messages, tools);
+        if (result.compressed()) {
+            logger.info("ReAct 上下文压缩完成: generationId={}, conversationId={}, tokens {} -> {}, trigger={}",
+                    generationId, conversationId, result.beforeTokens(), result.afterTokens(), result.triggerTokens());
+        }
     }
 
     private ExecutedToolResult executeToolForReAct(String userId,

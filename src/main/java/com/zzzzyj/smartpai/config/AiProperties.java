@@ -35,5 +35,13 @@ public class AiProperties {
         private Integer maxTokens = 2000;
         /** nucleus top-p */
         private Double topP = 0.9;
+        /** 模型上下文窗口大小，用于触发历史压缩；不同 provider 可通过环境变量覆盖。 */
+        private Integer maxContextTokens = 128000;
+        /** 上下文占用达到该比例时触发压缩。 */
+        private Double compressionTriggerRatio = 0.9;
+        /** 压缩时保留最近 N 个用户回合，避免把当前任务和最近工具结果摘要掉。 */
+        private Integer compressionRetainRecentRounds = 3;
+        /** 摘要请求的最大输出 tokens。 */
+        private Integer compressionSummaryMaxTokens = 800;
     }
-} 
+}

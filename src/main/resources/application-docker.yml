@@ -162,3 +162,7 @@ ai:
     temperature: ${AI_GENERATION_TEMPERATURE:0.3}
     max-tokens: ${AI_GENERATION_MAX_TOKENS:2000}
     top-p: ${AI_GENERATION_TOP_P:0.9}
+    max-context-tokens: ${AI_MAX_CONTEXT_TOKENS:128000}
+    compression-trigger-ratio: ${AI_CONTEXT_COMPRESSION_TRIGGER_RATIO:0.9}
+    compression-retain-recent-rounds: ${AI_CONTEXT_COMPRESSION_RETAIN_RECENT_ROUNDS:3}
+    compression-summary-max-tokens: ${AI_CONTEXT_COMPRESSION_SUMMARY_MAX_TOKENS:800}

@@ -33,17 +33,20 @@ public class LlmProviderRouter {
     private final UsageQuotaService usageQuotaService;
     private final ModelProviderConfigService modelProviderConfigService;
     private final ObjectMapper objectMapper;
+    private final ChatTokenEstimator chatTokenEstimator;
 
     public LlmProviderRouter(AiProperties aiProperties,
                              RateLimitService rateLimitService,
                              UsageQuotaService usageQuotaService,
                              ModelProviderConfigService modelProviderConfigService,
-                             ObjectMapper objectMapper) {
+                             ObjectMapper objectMapper,
+                             ChatTokenEstimator chatTokenEstimator) {
         this.aiProperties = aiProperties;
         this.rateLimitService = rateLimitService;
         this.usageQuotaService = usageQuotaService;
         this.modelProviderConfigService = modelProviderConfigService;
         this.objectMapper = objectMapper;
+        this.chatTokenEstimator = chatTokenEstimator;
     }
 
     // 这个是simple简单的流式回答的方法
@@ -197,8 +200,7 @@ public class LlmProviderRouter {
                 modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
         Map<String, Object> request = buildReActRequest(provider.model(), messages, tools, maxCompletionTokens, false);
 
-        int estimatedPromptTokens = estimateObjectMessagesTokens(messages)
-                + (tools == null || tools.isEmpty() ? 0 : estimateToolsTokens(tools));
+        int estimatedPromptTokens = estimateReActRequestTokens(messages, tools);
         UsageQuotaService.TokenReservationBundle reservation = rateLimitService.reserveLlmUsage(
                 requesterId, estimatedPromptTokens, maxCompletionTokens);
 
@@ -246,8 +248,7 @@ public class LlmProviderRouter {
         ModelProviderConfigService.ActiveProviderView provider =
                 modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
         Map<String, Object> request = buildReActRequest(provider.model(), messages, tools, maxCompletionTokens, true);
-        int estimatedPromptTokens = estimateObjectMessagesTokens(messages)
-                + (tools == null || tools.isEmpty() ? 0 : estimateToolsTokens(tools));
+        int estimatedPromptTokens = estimateReActRequestTokens(messages, tools);
         UsageQuotaService.TokenReservationBundle reservation = rateLimitService.reserveLlmUsage(
                 requesterId, estimatedPromptTokens, Math.max(maxCompletionTokens, 1));
         ReActStreamAccumulator accumulator = new ReActStreamAccumulator(reservation, estimatedPromptTokens);
@@ -283,6 +284,52 @@ public class LlmProviderRouter {
         } catch (Exception exception) {
             usageQuotaService.abortReservation(reservation);
             throw exception;
+        }
+    }
+
+    public int estimateReActRequestTokens(List<Map<String, Object>> messages,
+                                          List<AgentToolRegistry.AgentTool> tools) {
+        return chatTokenEstimator.estimateReActRequestTokens(messages, tools);
+    }
+
+    public String summarizeMessagesForCompaction(String requesterId,
+                                                 List<Map<String, Object>> messages,
+                                                 int maxCompletionTokens) {
+        ModelProviderConfigService.ActiveProviderView provider =
+                modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
+        List<Map<String, Object>> summaryMessages = buildCompactionSummaryMessages(messages);
+        int normalizedMaxTokens = Math.max(maxCompletionTokens, 128);
+        int estimatedPromptTokens = chatTokenEstimator.estimateMessagesTokens(summaryMessages);
+        UsageQuotaService.TokenReservationBundle reservation = rateLimitService.reserveLlmUsage(
+                requesterId, estimatedPromptTokens, normalizedMaxTokens);
+
+        try {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("model", provider.model());
+            request.put("messages", summaryMessages);
+            request.put("stream", false);
+            request.put("max_tokens", normalizedMaxTokens);
+            request.put("temperature", 0.2d);
+
+            String responseBody = buildClient(provider)
+                    .post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(60));
+
+            JsonNode root = objectMapper.readTree(responseBody);
+            String summary = root.path("choices").path(0).path("message").path("content").asText("").trim();
+            JsonNode usage = root.path("usage");
+            int promptTokens = usage.path("prompt_tokens").asInt(estimatedPromptTokens);
+            int completionTokens = usage.path("completion_tokens").asInt(chatTokenEstimator.estimateTextTokens(summary));
+            usageQuotaService.settleReservation(reservation, promptTokens + completionTokens);
+            return summary;
+        } catch (Exception exception) {
+            usageQuotaService.abortReservation(reservation);
+            throw new RuntimeException("上下文压缩摘要生成失败", exception);
         }
     }
 
@@ -432,47 +479,53 @@ public class LlmProviderRouter {
         return openAiTools;
     }
 
-    private int estimateToolsTokens(List<AgentToolRegistry.AgentTool> tools) {
-        int tokens = 0;
-        for (AgentToolRegistry.AgentTool tool : tools) {
-            tokens += usageQuotaService.estimateTextTokens(tool.name());
-            tokens += usageQuotaService.estimateTextTokens(tool.description());
-            try {
-                tokens += usageQuotaService.estimateTextTokens(objectMapper.writeValueAsString(tool.parameters()));
-            } catch (Exception ignored) {
-                tokens += 80;
-            }
-        }
-        return tokens;
-    }
-
-    private int estimateObjectMessagesTokens(List<Map<String, Object>> messages) {
-        if (messages == null || messages.isEmpty()) {
-            return 0;
-        }
-        int tokens = 0;
-        for (Map<String, Object> message : messages) {
-            tokens += 8;
-            tokens += usageQuotaService.estimateTextTokens(String.valueOf(message.getOrDefault("role", "")));
-            tokens += usageQuotaService.estimateTextTokens(String.valueOf(message.getOrDefault("content", "")));
-            Object reasoningContent = message.get("reasoning_content");
-            if (reasoningContent != null) {
-                tokens += usageQuotaService.estimateTextTokens(String.valueOf(reasoningContent));
-            }
-            Object toolCalls = message.get("tool_calls");
-            if (toolCalls != null) {
-                try {
-                    tokens += usageQuotaService.estimateTextTokens(objectMapper.writeValueAsString(toolCalls));
-                } catch (Exception ignored) {
-                    tokens += 128;
+    private List<Map<String, Object>> buildCompactionSummaryMessages(List<Map<String, Object>> messages) {
+        StringBuilder transcript = new StringBuilder();
+        if (messages != null) {
+            for (Map<String, Object> message : messages) {
+                transcript.append(String.valueOf(message.getOrDefault("role", "unknown")).toUpperCase())
+                        .append(": ")
+                        .append(String.valueOf(message.getOrDefault("content", "")));
+                Object toolCalls = message.get("tool_calls");
+                if (toolCalls != null) {
+                    transcript.append("\nTOOL_CALLS: ");
+                    try {
+                        transcript.append(objectMapper.writeValueAsString(toolCalls));
+                    } catch (Exception ignored) {
+                        transcript.append(String.valueOf(toolCalls));
+                    }
+                }
+                Object toolCallId = message.get("tool_call_id");
+                if (toolCallId != null) {
+                    transcript.append("\nTOOL_CALL_ID: ").append(toolCallId);
+                }
+                transcript.append("\n\n");
+                // 摘要请求本身也要受控，避免极端长历史导致压缩请求先超窗。
+                if (transcript.length() > 60_000) {
+                    transcript.append("...(更早内容已截断)\n");
+                    break;
                 }
             }
-            Object toolCallId = message.get("tool_call_id");
-            if (toolCallId != null) {
-                tokens += usageQuotaService.estimateTextTokens(String.valueOf(toolCallId));
-            }
         }
-        return Math.max(tokens, 1);
+
+        String prompt = """
+                请把下面这段 ReAct 对话历史压缩成简明摘要，保留：
+                1. 用户已经提出的关键需求、约束和上下文指代；
+                2. 助手已经给出的重要结论；
+                3. 已执行工具的核心结果，而不是完整工具输出；
+                4. 后续回答仍需要遵守的事实、引用线索和未解决问题。
+
+                不要编造新事实，不要输出标题，不要使用列表，输出 1-3 段中文摘要。
+
+                === 待压缩历史 ===
+                %s
+                === 待压缩历史结束 ===
+                """.formatted(transcript);
+
+        List<Map<String, Object>> summaryMessages = new ArrayList<>();
+        summaryMessages.add(newMessage("system", "你是对话上下文压缩器，只输出摘要本身。"));
+        summaryMessages.add(newMessage("user", prompt));
+        return summaryMessages;
     }
 
     private ReActTurn parseReActTurn(String responseBody, int estimatedPromptTokens) {
@@ -518,7 +571,7 @@ public class LlmProviderRouter {
             int promptTokens = usage.path("prompt_tokens").asInt(estimatedPromptTokens);
             int completionTokens = usage.path("completion_tokens").asInt(
                     usageQuotaService.estimateTextTokens(messageNode.path("content").asText(""))
-                            + estimateObjectMessagesTokens(List.of(assistantMessage))
+                    + chatTokenEstimator.estimateMessagesTokens(List.of(assistantMessage))
             );
             return new ReActTurn(
                     messageNode.path("content").asText("").trim(),
@@ -694,7 +747,7 @@ public class LlmProviderRouter {
         int actualCompletionTokens = accumulator.completionTokens > 0
                 ? accumulator.completionTokens
                 : usageQuotaService.estimateTextTokens(accumulator.content.toString())
-                + estimateObjectMessagesTokens(List.of(accumulator.assistantMessage()));
+                + chatTokenEstimator.estimateMessagesTokens(List.of(accumulator.assistantMessage()));
         usageQuotaService.settleReservation(accumulator.reservation, actualPromptTokens + actualCompletionTokens);
     }
 

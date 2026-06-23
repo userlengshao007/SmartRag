@@ -23,7 +23,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final ChatSessionRegistry chatSessionRegistry;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final JwtUtils jwtUtils;
-    
+
     // 内部指令令牌 - 可以从配置文件读取
     private static final String INTERNAL_CMD_TOKEN = "WSS_STOP_CMD_" + System.currentTimeMillis() % 1000000;
 
