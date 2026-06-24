@@ -7,6 +7,7 @@ import co.elastic.clients.elasticsearch.indices.IndicesStatsResponse;
 import co.elastic.clients.elasticsearch.indices.stats.IndicesStats;
 import com.zzzzyj.smartpai.client.DeepSeekClient;
 import com.zzzzyj.smartpai.entity.SearchResult;
+import com.zzzzyj.smartpai.model.ChatMemory;
 import com.zzzzyj.smartpai.model.FileUpload;
 import com.zzzzyj.smartpai.repository.FileUploadRepository;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -33,6 +34,7 @@ public class AgentToolRegistry {
     private final StringRedisTemplate stringRedisTemplate;
     private final ElasticsearchClient elasticsearchClient;
     private final FileUploadRepository fileUploadRepository;
+    private final ChatMemoryService chatMemoryService;
     private final List<AgentTool> tools;
     private final Map<String, ToolHandler> handlers;
 
@@ -40,17 +42,20 @@ public class AgentToolRegistry {
                              DeepSeekClient deepSeekClient,
                              StringRedisTemplate stringRedisTemplate,
                              ElasticsearchClient elasticsearchClient,
-                             FileUploadRepository fileUploadRepository) {
+                             FileUploadRepository fileUploadRepository,
+                             ChatMemoryService chatMemoryService) {
         this.hybridSearchService = hybridSearchService;
         this.deepSeekClient = deepSeekClient;
         this.stringRedisTemplate = stringRedisTemplate;
         this.elasticsearchClient = elasticsearchClient;
         this.fileUploadRepository = fileUploadRepository;
+        this.chatMemoryService = chatMemoryService;
         // 工具的说明书
         this.tools = List.of(
                 searchKnowledgeTool(),
                 generateSummaryTool(),
                 submitFeedbackTool(),
+                saveMemoryTool(),
                 knowledgeStatsTool()
         );
         // 创建工具的执行代码
@@ -58,6 +63,7 @@ public class AgentToolRegistry {
                 "search_knowledge", this::executeSearchKnowledge,
                 "generate_summary", this::executeGenerateSummary,
                 "submit_feedback", this::executeSubmitFeedback,
+                "save_memory", this::executeSaveMemory,
                 "knowledge_stats", this::executeKnowledgeStats
         );
     }
@@ -73,18 +79,26 @@ public class AgentToolRegistry {
     }
 
     public ToolExecutionResult executeTool(String name, Map<String, Object> arguments, String userId) {
-        return executeTool(name, arguments, userId, null);
+        return executeTool(name, arguments, userId, null, null);
     }
 
     public ToolExecutionResult executeTool(String name,
                                            Map<String, Object> arguments,
                                            String userId,
                                            Consumer<String> onChunk) {
+        return executeTool(name, arguments, userId, null, onChunk);
+    }
+
+    public ToolExecutionResult executeTool(String name,
+                                           Map<String, Object> arguments,
+                                           String userId,
+                                           String conversationId,
+                                           Consumer<String> onChunk) {
         ToolHandler handler = handlers.get(name);
         if (handler == null) {
             throw new IllegalArgumentException("未注册的工具: " + name);
         }
-        return handler.execute(arguments == null ? Collections.emptyMap() : arguments, userId, onChunk);
+        return handler.execute(arguments == null ? Collections.emptyMap() : arguments, userId, conversationId, onChunk);
     }
 
     /**
@@ -97,6 +111,7 @@ public class AgentToolRegistry {
      */
     private ToolExecutionResult executeSearchKnowledge(Map<String, Object> arguments,
                                                        String userId,
+                                                       String conversationId,
                                                        Consumer<String> onChunk) {
         // 1.检查用户身份
         requireUserId(userId);
@@ -125,6 +140,7 @@ public class AgentToolRegistry {
      */
     private ToolExecutionResult executeGenerateSummary(Map<String, Object> arguments,
                                                        String userId,
+                                                       String conversationId,
                                                        Consumer<String> onChunk) {
         requireUserId(userId);
         String topic = getRequiredString(arguments, "topic");
@@ -156,6 +172,7 @@ public class AgentToolRegistry {
      */
     private ToolExecutionResult executeSubmitFeedback(Map<String, Object> arguments,
                                                       String userId,
+                                                      String conversationId,
                                                       Consumer<String> onChunk) {
         requireUserId(userId);
         String rating = getRequiredString(arguments, "rating").toLowerCase(Locale.ROOT);
@@ -178,6 +195,40 @@ public class AgentToolRegistry {
         return new ToolExecutionResult("submit_feedback", true, "已记录用户反馈: " + value, data);
     }
 
+    private ToolExecutionResult executeSaveMemory(Map<String, Object> arguments,
+                                                  String userId,
+                                                  String conversationId,
+                                                  Consumer<String> onChunk) {
+        requireUserId(userId);
+        String content = getRequiredString(arguments, "content");
+        String scopeRaw = Optional.ofNullable(getOptionalString(arguments, "scope")).orElse("user");
+        ChatMemory.MemoryScope scope = "conversation".equalsIgnoreCase(scopeRaw)
+                ? ChatMemory.MemoryScope.CONVERSATION
+                : ChatMemory.MemoryScope.USER;
+        String typeRaw = Optional.ofNullable(getOptionalString(arguments, "type")).orElse("fact");
+        ChatMemory.MemoryType type = "preference".equalsIgnoreCase(typeRaw)
+                ? ChatMemory.MemoryType.PREFERENCE
+                : ChatMemory.MemoryType.FACT;
+
+        Optional<ChatMemory> saved = chatMemoryService.storeMemory(
+                userId,
+                conversationId,
+                scope,
+                type,
+                content,
+                Map.of("source", "save_memory_tool", "toolScope", scope.name())
+        );
+        if (saved.isEmpty()) {
+            return new ToolExecutionResult("save_memory", false, "未能保存长期记忆。", Map.of());
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", saved.get().getId());
+        data.put("scope", saved.get().getScope().name());
+        data.put("type", saved.get().getType().name());
+        return new ToolExecutionResult("save_memory", true, "已保存长期记忆：" + saved.get().getContent(), data);
+    }
+
 
     /**
      * 知识库信息统计工具
@@ -189,6 +240,7 @@ public class AgentToolRegistry {
      */
     private ToolExecutionResult executeKnowledgeStats(Map<String, Object> arguments,
                                                       String userId,
+                                                      String conversationId,
                                                       Consumer<String> onChunk) {
         try {
             // 1. 获取索引统计信息
@@ -269,6 +321,22 @@ public class AgentToolRegistry {
                 "knowledge_stats",
                 "返回当前知识库的统计信息，包括 MySQL 文档总数、Elasticsearch 片段总数、索引存储量和最近更新时间。仅当用户询问知识库规模、文档数量、片段数量、更新时间或索引状态时调用。",
                 objectSchema(Collections.emptyMap(), Collections.emptyList())
+        );
+    }
+
+    private AgentTool saveMemoryTool() {
+        Map<String, Object> scopeSchema = stringSchema("记忆作用域。user 表示跨会话长期有效；conversation 表示仅当前会话有效。默认 user。");
+        scopeSchema.put("enum", List.of("user", "conversation"));
+        Map<String, Object> typeSchema = stringSchema("记忆类型。fact 表示稳定事实；preference 表示用户偏好。默认 fact。");
+        typeSchema.put("enum", List.of("fact", "preference"));
+        return new AgentTool(
+                "save_memory",
+                "仅当用户明确要求“记住”“以后都按此偏好”“保存这个信息”时调用，用于保存跨轮次可复用的长期记忆。不要保存一次性任务、临时步骤、模型猜测或未被用户确认的信息。",
+                objectSchema(Map.of(
+                        "content", stringSchema("要保存的稳定事实或用户偏好，必须忠实来自用户明确表达。"),
+                        "scope", scopeSchema,
+                        "type", typeSchema
+                ), List.of("content"))
         );
     }
 
@@ -392,7 +460,7 @@ public class AgentToolRegistry {
 
     @FunctionalInterface
     private interface ToolHandler {
-        ToolExecutionResult execute(Map<String, Object> arguments, String userId, Consumer<String> onChunk);
+        ToolExecutionResult execute(Map<String, Object> arguments, String userId, String conversationId, Consumer<String> onChunk);
     }
 
     public record AgentTool(

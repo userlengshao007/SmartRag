@@ -48,6 +48,7 @@ public class ChatHandler {
     private static final int MAX_REACT_ROUNDS = 4;
     private static final int MAX_REACT_TOOL_CALLS = 8;
     private static final int REACT_MAX_COMPLETION_TOKENS = 2000;
+    private static final int LONG_TERM_MEMORY_CONTEXT_MAX_TOKENS = 1200;
     private final RedisTemplate<String, String> redisTemplate;
     private final HybridSearchService searchService;
     private final LlmProviderRouter llmProviderRouter;
@@ -57,6 +58,7 @@ public class ChatHandler {
     private final ChatSessionRegistry chatSessionRegistry;
     private final AgentToolRegistry agentToolRegistry;
     private final ReActContextCompressor reActContextCompressor;
+    private final ChatMemoryService chatMemoryService;
     private final ThreadPoolTaskExecutor chatMonitorExecutor;
     private final ObjectMapper objectMapper;
     
@@ -82,6 +84,7 @@ public class ChatHandler {
                       ChatSessionRegistry chatSessionRegistry,
                       AgentToolRegistry agentToolRegistry,
                       ReActContextCompressor reActContextCompressor,
+                      ChatMemoryService chatMemoryService,
                       ObjectMapper objectMapper,
                       @Qualifier("chatMonitorExecutor") ThreadPoolTaskExecutor chatMonitorExecutor) {
         this.redisTemplate = redisTemplate;
@@ -93,6 +96,7 @@ public class ChatHandler {
         this.chatSessionRegistry = chatSessionRegistry;
         this.agentToolRegistry = agentToolRegistry;
         this.reActContextCompressor = reActContextCompressor;
+        this.chatMemoryService = chatMemoryService;
         this.objectMapper = objectMapper;
         this.chatMonitorExecutor = chatMonitorExecutor;
     }
@@ -107,6 +111,7 @@ public class ChatHandler {
             // 1. 获取或创建会话 ID
             conversationId = getOrCreateConversationId(userId);
             conversationService.ensureConversationSession(Long.parseLong(userId), conversationId, userMessage);
+            chatMemoryService.storeExplicitMemoryHint(userId, conversationId, userMessage);
             ChatGenerationStateService.GenerationSnapshot generation =
                     chatGenerationStateService.createGeneration(userId, conversationId, userMessage);
             generationId = generation.generationId();
@@ -193,11 +198,18 @@ public class ChatHandler {
                               String generationId,
                               List<Map<String, String>> history,
                               CompletableFuture<String> responseFuture) {
+        String memoryContext = chatMemoryService.buildMemoryContext(
+                userId,
+                conversationId,
+                userMessage,
+                LONG_TERM_MEMORY_CONTEXT_MAX_TOKENS
+        );
         List<Map<String, Object>> messages = llmProviderRouter.buildReActMessages(
                 userMessage,
                 "",
                 history,
-                buildRecentFeedbackGuidance(userId) // 用户对回答的满意或者是不满意，如果是满意需要参考这类回答，如果是不满意要避免此类回答
+                buildRecentFeedbackGuidance(userId), // 用户对回答的满意或者是不满意，如果是满意需要参考这类回答，如果是不满意要避免此类回答
+                memoryContext
         );
         int executedToolCalls = 0; // 已执行的工具调用次数
         int totalPromptTokens = 0; // 总输入Token数
@@ -325,7 +337,7 @@ public class ChatHandler {
                     : null;
             // 真正执行工具
             AgentToolRegistry.ToolExecutionResult toolResult =
-                    agentToolRegistry.executeTool(toolCall.name(), toolCall.arguments(), userId, toolChunkConsumer);
+                    agentToolRegistry.executeTool(toolCall.name(), toolCall.arguments(), userId, conversationId, toolChunkConsumer);
 
             // search_knowledge 返回的 SearchResult 列表与模型 prompt 中的 [N] 编号一一对应，
             // 必须把它落到 generationReferenceMappings 里，否则前端点击引用拿不到 MD5/页码。
@@ -941,9 +953,6 @@ public class ChatHandler {
     /**
      * 根据会话ID和引用编号获取文件MD5
      *
-     * @param sessionId WebSocket会话ID
-     * @param referenceNumber 引用编号
-     * @return 文件MD5，如果找不到则返回null
      */
     public String getReferenceMd5(String generationId, int referenceNumber) {
         ReferenceInfo detail = getReferenceDetail(generationId, referenceNumber);

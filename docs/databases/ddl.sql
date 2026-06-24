@@ -50,6 +50,24 @@ CREATE TABLE conversation_sessions (
                                        FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话会话表';
 
+CREATE TABLE chat_memories (
+                               id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '长期记忆主键',
+                               user_id BIGINT NOT NULL COMMENT '关联用户ID',
+                               scope VARCHAR(32) NOT NULL COMMENT '作用域：USER/CONVERSATION',
+                               conversation_id VARCHAR(64) DEFAULT NULL COMMENT '会话级记忆关联的逻辑会话ID',
+                               org_tag VARCHAR(50) DEFAULT NULL COMMENT '用户主组织标签快照，预留给组织级检索',
+                               type VARCHAR(32) NOT NULL COMMENT '记忆类型：FACT/PREFERENCE/SUMMARY/TOOL_RESULT',
+                               content TEXT NOT NULL COMMENT '记忆内容',
+                               metadata_json LONGTEXT DEFAULT NULL COMMENT '记忆元数据 JSON',
+                               token_count INT NOT NULL COMMENT '内容估算 token 数',
+                               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                               INDEX idx_chat_memory_user_scope (user_id, scope),
+                               INDEX idx_chat_memory_conversation (conversation_id),
+                               INDEX idx_chat_memory_updated_at (updated_at),
+                               FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天长期记忆表';
+
 
 CREATE TABLE file_upload (
                              id           BIGINT           NOT NULL AUTO_INCREMENT COMMENT '主键',

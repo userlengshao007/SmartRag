@@ -126,12 +126,26 @@ public class LlmProviderRouter {
                                                         String context,
                                                         List<Map<String, String>> history,
                                                         String feedbackGuidance) {
+        return buildReActMessages(userMessage, context, history, feedbackGuidance, "");
+    }
+
+    public List<Map<String, Object>> buildReActMessages(String userMessage,
+                                                        String context,
+                                                        List<Map<String, String>> history,
+                                                        String feedbackGuidance,
+                                                        String memoryContext) {
         List<Map<String, Object>> messages = new ArrayList<>();
         AiProperties.Prompt promptCfg = aiProperties.getPrompt();
 
         StringBuilder sysBuilder = new StringBuilder();
         if (promptCfg.getRules() != null) {
             sysBuilder.append(promptCfg.getRules()).append("\n\n");
+        }
+        if (memoryContext != null && !memoryContext.isBlank()) {
+            // 长期记忆来自当前用户可见范围，只作为回答偏好和稳定事实参考，不替代知识库检索。
+            sysBuilder.append("相关长期记忆：\n")
+                    .append(memoryContext.trim())
+                    .append("\n\n");
         }
         sysBuilder.append("本系统是「知识库优先」的问答助手：你的首要职责是基于本系统已收录的资料回答用户。除非命中下方明确的白名单，否则**每一个用户问题都必须先调用 search_knowledge**，再基于检索结果作答。\n\n")
                 .append("强制检索原则（默认行为）：\n")
