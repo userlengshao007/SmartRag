@@ -47,8 +47,10 @@ public class ChatHandler {
     private static final int GENERATION_COMPLETION_TIMEOUT_SECONDS = 120;
     private static final int MAX_REACT_ROUNDS = 4;
     private static final int MAX_REACT_TOOL_CALLS = 8;
+    private static final int REACT_STAGNATION_WINDOW = 3;
     private static final int REACT_MAX_COMPLETION_TOKENS = 2000;
     private static final int LONG_TERM_MEMORY_CONTEXT_MAX_TOKENS = 1200;
+    private static final int MEMORY_EXTRACTION_MAX_COMPLETION_TOKENS = 600;
     private final RedisTemplate<String, String> redisTemplate;
     private final HybridSearchService searchService;
     private final LlmProviderRouter llmProviderRouter;
@@ -215,6 +217,7 @@ public class ChatHandler {
         int totalPromptTokens = 0; // 总输入Token数
         int totalCompletionTokens = 0; // 总输出Token数
         List<AgentToolRegistry.AgentTool> tools = agentToolRegistry.getTools();
+        ReActBudgetGuard budgetGuard = new ReActBudgetGuard(REACT_STAGNATION_WINDOW, objectMapper);
 
         // 最多循环4轮
         for (int round = 1; round <= MAX_REACT_ROUNDS; round++) {
@@ -242,6 +245,32 @@ public class ChatHandler {
                 finalizeResponse(userId, userMessage, conversationId, generationId, responseFuture,
                         responseBuilders.get(generationId),
                         new LlmProviderRouter.StreamCompletion(turn.finishReason(), totalPromptTokens, totalCompletionTokens, turn.content().length()));
+                return;
+            }
+
+            if (budgetGuard.recordAndIsStagnant(turn.toolCalls())) {
+                logger.warn("检测到 ReAct 连续重复工具调用，转入无工具收尾: generationId={}, conversationId={}",
+                        generationId, conversationId);
+                messages.add(Map.of(
+                        "role", "user",
+                        "content", "检测到连续多轮重复相同工具调用，请不要再调用工具，直接基于已有 tool 结果给出最终回答。"
+                ));
+                LlmProviderRouter.ReActTurn finalTurn = streamReActTurnBlocking(
+                        userId, conversationId, generationId, messages, List.of());
+                if (finalTurn == null) {
+                    cleanupGenerationState(generationId, null);
+                    return;
+                }
+                totalPromptTokens += finalTurn.promptTokens();
+                totalCompletionTokens += finalTurn.completionTokens();
+                finalizeResponse(userId, userMessage, conversationId, generationId, responseFuture,
+                        responseBuilders.get(generationId),
+                        new LlmProviderRouter.StreamCompletion(
+                                finalTurn.finishReason(),
+                                totalPromptTokens,
+                                totalCompletionTokens,
+                                finalTurn.content().length()
+                        ));
                 return;
             }
 
@@ -565,6 +594,7 @@ public class ChatHandler {
         boolean persisted = persistConversation(userId, userMessage, completeResponse, conversationId, referenceMappings);
         if (persisted) {
             updateConversationHistory(conversationId, userMessage, completeResponse, referenceMappings);
+            extractLongTermMemoryAsync(userId, userMessage, completeResponse, conversationId, generationId);
         } else {
             logger.warn("MySQL 落库失败，跳过 Redis 会话历史写入以保持两端一致: generationId={}, conversationId={}",
                     generationId, conversationId);
@@ -574,6 +604,51 @@ public class ChatHandler {
         logger.info("对话存储信息 - Redis键: {}, 值: {}", "user:" + userId + ":current_conversation", conversationId);
         cleanupGenerationState(generationId, null);
         logger.info("消息处理完成，用户ID: {}", userId);
+    }
+
+    private void extractLongTermMemoryAsync(String userId,
+                                            String userMessage,
+                                            String completeResponse,
+                                            String conversationId,
+                                            String generationId) {
+        try {
+            chatMonitorExecutor.execute(() -> {
+                try {
+                    List<LlmProviderRouter.ExtractedMemoryFact> facts = llmProviderRouter.extractStableMemoryFacts(
+                            userId,
+                            userMessage,
+                            completeResponse,
+                            MEMORY_EXTRACTION_MAX_COMPLETION_TOKENS
+                    );
+                    int savedCount = 0;
+                    for (LlmProviderRouter.ExtractedMemoryFact fact : facts) {
+                        var saved = chatMemoryService.storeMemory(
+                                userId,
+                                conversationId,
+                                fact.scope(),
+                                fact.type(),
+                                fact.content(),
+                                Map.of(
+                                        "source", "auto_fact_extractor",
+                                        "generationId", generationId,
+                                        "confidence", String.valueOf(fact.confidence())
+                                )
+                        );
+                        if (saved.isPresent()) {
+                            savedCount++;
+                        }
+                    }
+                    if (!facts.isEmpty()) {
+                        logger.info("长期记忆自动提取完成: generationId={}, extracted={}, saved={}",
+                                generationId, facts.size(), savedCount);
+                    }
+                } catch (Exception exception) {
+                    logger.warn("长期记忆自动提取失败，不影响当前回答: generationId={}", generationId, exception);
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            logger.warn("聊天处理线程池已满，跳过长期记忆自动提取: generationId={}", generationId);
+        }
     }
 
     private boolean persistConversation(String userId, String userMessage, String completeResponse, String conversationId,

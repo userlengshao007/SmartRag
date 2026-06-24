@@ -1,9 +1,11 @@
 package com.zzzzyj.smartpai.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zzzzyj.smartpai.config.AiProperties;
+import com.zzzzyj.smartpai.model.ChatMemory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 @Service
@@ -347,6 +350,89 @@ public class LlmProviderRouter {
         }
     }
 
+    /**
+     * 从对话中提取稳定的长期记忆事实
+     * <p>
+     * 该方法会调用LLM分析用户消息和助手回复，提取需要长期保存的关键信息，
+     * 如用户偏好、个人事实等。提取过程受速率限制和配额管理控制。
+     * </p>
+     *
+     * @param requesterId 请求者ID，用于速率限制和配额管理
+     * @param userMessage 用户消息内容，将被截断至4000字符
+     * @param assistantResponse 助手回复内容，将被截断至6000字符
+     * @param maxCompletionTokens 最大完成token数，最小值为128
+     * @return 提取的记忆事实列表，如果输入为空或解析失败则返回空列表
+     * @throws RuntimeException 当LLM调用失败时抛出异常
+     */
+    public List<ExtractedMemoryFact> extractStableMemoryFacts(String requesterId,
+                                                              String userMessage,
+                                                              String assistantResponse,
+                                                              int maxCompletionTokens) {
+        // 截断输入文本以防止超出token限制
+        String user = limitText(userMessage, 4000);
+        String assistant = limitText(assistantResponse, 6000);
+        if ((user == null || user.isBlank()) && (assistant == null || assistant.isBlank())) {
+            return List.of();
+        }
+
+        // 获取当前激活的LLM提供商配置
+        ModelProviderConfigService.ActiveProviderView provider =
+                modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
+
+        // 构建记忆提取的消息提示
+        List<Map<String, Object>> messages = buildMemoryExtractionMessages(user, assistant);
+
+        // 规范化最大token数并估算prompt token消耗
+        int normalizedMaxTokens = Math.max(maxCompletionTokens, 128);
+        int estimatedPromptTokens = chatTokenEstimator.estimateMessagesTokens(messages);
+
+        // 预留使用配额以进行速率控制
+        UsageQuotaService.TokenReservationBundle reservation = rateLimitService.reserveLlmUsage(
+                requesterId, estimatedPromptTokens, normalizedMaxTokens);
+
+        try {
+            // 构建LLM请求参数
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("model", provider.model());
+            request.put("messages", messages);
+            request.put("stream", false);
+            request.put("max_tokens", normalizedMaxTokens);
+            request.put("temperature", 0.1d);
+
+            // 发送HTTP请求到LLM API并获取响应
+            String responseBody = buildClient(provider)
+                    .post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(60));
+
+            // 解析LLM响应，提取内容和用量信息
+            JsonNode root = objectMapper.readTree(responseBody);
+            String content = root.path("choices").path(0).path("message").path("content").asText("").trim();
+            JsonNode usage = root.path("usage");
+            int promptTokens = usage.path("prompt_tokens").asInt(estimatedPromptTokens);
+            int completionTokens = usage.path("completion_tokens").asInt(chatTokenEstimator.estimateTextTokens(content));
+
+            // 结算实际使用的token配额
+            usageQuotaService.settleReservation(reservation, promptTokens + completionTokens);
+
+            // 解析提取的记忆事实JSON
+            try {
+                return parseExtractedMemoryFacts(content);
+            } catch (JsonProcessingException parseException) {
+                logger.warn("长期记忆事实提取结果不是有效 JSON，已忽略: {}", content, parseException);
+                return List.of();
+            }
+        } catch (Exception exception) {
+            // 发生异常时中止配额预留
+            usageQuotaService.abortReservation(reservation);
+            throw new RuntimeException("长期记忆事实提取失败", exception);
+        }
+    }
+
     private WebClient buildClient(ModelProviderConfigService.ActiveProviderView provider) {
         WebClient.Builder builder = WebClient.builder()
                 .baseUrl(ModelProviderConfigService.normalizeOpenAiCompatibleBaseUrl(provider.apiBaseUrl()));
@@ -366,6 +452,88 @@ public class LlmProviderRouter {
             return;
         }
         logger.warn("{}: {}", message, error.getMessage(), error);
+    }
+
+    private List<Map<String, Object>> buildMemoryExtractionMessages(String userMessage, String assistantResponse) {
+        String prompt = """
+                请从下面这一轮对话中提取“跨会话仍然成立、以后回答仍有价值”的长期记忆。
+
+                只允许提取：
+                - 用户明确表达的偏好、习惯、默认要求；
+                - 用户明确确认的稳定事实；
+                - 与用户账号/团队/系统使用方式有关、未来复用仍有价值的信息。
+
+                绝对不要提取：
+                - 本轮的一次性任务、待办、步骤或临时输出要求；
+                - 助手自己的推测、建议、免责声明或不确定判断；
+                - 知识库文档里的普通内容，除非用户明确要求以后记住；
+                - “用户让助手做某事”这类请求句。
+
+                只输出 JSON 数组，不要 Markdown，不要解释。数组元素格式：
+                {"content":"稳定事实或偏好","type":"FACT 或 PREFERENCE","scope":"USER 或 CONVERSATION","confidence":0.0到1.0}
+
+                如果没有值得保存的长期记忆，输出 []。
+
+                用户消息：
+                %s
+
+                助手回答：
+                %s
+                """.formatted(userMessage == null ? "" : userMessage, assistantResponse == null ? "" : assistantResponse);
+
+        List<Map<String, Object>> messages = new ArrayList<>();
+        messages.add(newMessage("system", "你是长期记忆抽取器，只输出严格 JSON。"));
+        messages.add(newMessage("user", prompt));
+        return messages;
+    }
+
+    private List<ExtractedMemoryFact> parseExtractedMemoryFacts(String rawContent) throws JsonProcessingException {
+        String json = stripJsonFence(rawContent);
+        if (json.isBlank()) {
+            return List.of();
+        }
+        JsonNode root = objectMapper.readTree(json);
+        if (!root.isArray()) {
+            return List.of();
+        }
+
+        List<ExtractedMemoryFact> facts = new ArrayList<>();
+        for (JsonNode item : root) {
+            String content = item.path("content").asText("").replaceAll("\\s+", " ").trim();
+            double confidence = item.path("confidence").asDouble(0.0d);
+            if (content.length() < 4 || content.length() > 500 || confidence < 0.65d) {
+                continue;
+            }
+            ChatMemory.MemoryType type = parseMemoryType(item.path("type").asText(""));
+            ChatMemory.MemoryScope scope = parseMemoryScope(item.path("scope").asText(""));
+            facts.add(new ExtractedMemoryFact(content, type, scope, confidence));
+            if (facts.size() >= 5) {
+                break;
+            }
+        }
+        return facts;
+    }
+
+    private String stripJsonFence(String rawContent) {
+        String trimmed = rawContent == null ? "" : rawContent.trim();
+        if (trimmed.startsWith("```")) {
+            int firstLineEnd = trimmed.indexOf('\n');
+            int lastFence = trimmed.lastIndexOf("```");
+            if (firstLineEnd >= 0 && lastFence > firstLineEnd) {
+                return trimmed.substring(firstLineEnd + 1, lastFence).trim();
+            }
+        }
+        return trimmed;
+    }
+
+    private ChatMemory.MemoryType parseMemoryType(String rawType) {
+        String normalized = rawType == null ? "" : rawType.trim().toUpperCase(Locale.ROOT);
+        return "PREFERENCE".equals(normalized) ? ChatMemory.MemoryType.PREFERENCE : ChatMemory.MemoryType.FACT;
+    }
+
+    private ChatMemory.MemoryScope parseMemoryScope(String rawScope) {
+        String normalized = rawScope == null ? "" : rawScope.trim().toUpperCase(Locale.ROOT);
+        return "CONVERSATION".equals(normalized) ? ChatMemory.MemoryScope.CONVERSATION : ChatMemory.MemoryScope.USER;
     }
 
     /**
@@ -919,6 +1087,14 @@ public class LlmProviderRouter {
             String finishReason,
             int promptTokens,
             int completionTokens
+    ) {
+    }
+
+    public record ExtractedMemoryFact(
+            String content,
+            ChatMemory.MemoryType type,
+            ChatMemory.MemoryScope scope,
+            double confidence
     ) {
     }
 
