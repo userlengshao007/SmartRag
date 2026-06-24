@@ -22,6 +22,22 @@ function handleCopy(content: string) {
 
 const chatStore = useChatStore();
 const feedbackSubmitting = ref<Record<string, boolean>>({});
+const memoryDialogVisible = ref(false);
+const memorySubmitting = ref(false);
+const memoryForm = reactive({
+  content: '',
+  scope: 'user' as 'user' | 'conversation',
+  type: 'preference' as 'fact' | 'preference'
+});
+
+const memoryScopeOptions = [
+  { label: '跨会话', value: 'user' },
+  { label: '当前会话', value: 'conversation' }
+];
+const memoryTypeOptions = [
+  { label: '偏好', value: 'preference' },
+  { label: '事实', value: 'fact' }
+];
 
 function getMessageFeedbackKey(message: Api.Chat.Message) {
   return message.generationId || `${message.conversationId || 'unknown'}:${message.timestamp || ''}`;
@@ -65,6 +81,57 @@ async function handleFeedback(message: Api.Chat.Message, rating: 'good' | 'bad')
 
   message.feedbackRating = rating;
   window.$message?.success(rating === 'good' ? '已记录点赞反馈' : '已记录点踩反馈');
+}
+
+function normalizeMemoryCandidate(message: Api.Chat.Message) {
+  const content = (message.content || '').replace(/\s+/g, ' ').trim();
+  return content.replace(/^(请)?(帮我)?记住[：:,，\s]*/u, '').trim();
+}
+
+function inferMemoryType(content: string): 'fact' | 'preference' {
+  return /喜欢|偏好|习惯|以后|默认|每次|都按|回答之前/u.test(content) ? 'preference' : 'fact';
+}
+
+function openMemoryDialog(message: Api.Chat.Message) {
+  const content = normalizeMemoryCandidate(message);
+  if (!content) {
+    window.$message?.warning('这条消息没有可保存的内容');
+    return;
+  }
+
+  memoryForm.content = content;
+  memoryForm.scope = 'user';
+  memoryForm.type = inferMemoryType(content);
+  memoryDialogVisible.value = true;
+}
+
+async function handleSaveMemory() {
+  const content = memoryForm.content.trim();
+  if (!content) {
+    window.$message?.warning('记忆内容不能为空');
+    return;
+  }
+
+  memorySubmitting.value = true;
+  const { error } = await request<Api.Chat.MemorySaveResult>({
+    url: 'chat/memories',
+    method: 'POST',
+    data: {
+      content,
+      scope: memoryForm.scope,
+      type: memoryForm.type,
+      conversationId: props.msg.conversationId || props.sessionId
+    }
+  });
+  memorySubmitting.value = false;
+
+  if (error) {
+    window.$message?.error('记忆保存失败');
+    return;
+  }
+
+  memoryDialogVisible.value = false;
+  window.$message?.success('已保存到长期记忆');
 }
 
 // 存储文件名和对应的事件处理
@@ -400,9 +467,14 @@ async function handleSourceFileClick(fileInfo: {
     <NText v-else-if="msg.role === 'user'" class="ml-12 mt-2 text-4">{{ content }}</NText>
     <NDivider class="ml-12 w-[calc(100%-3rem)] mb-0! mt-2!" />
     <div class="ml-12 flex gap-2">
-      <NButton quaternary title="复制回答" aria-label="复制回答" @click="handleCopy(msg.content)">
+      <NButton quaternary title="复制消息" aria-label="复制消息" @click="handleCopy(msg.content)">
         <template #icon>
           <icon-mynaui:copy />
+        </template>
+      </NButton>
+      <NButton quaternary title="保存到长期记忆" aria-label="保存到长期记忆" @click="openMemoryDialog(msg)">
+        <template #icon>
+          <SvgIcon icon="material-symbols:bookmark-add-outline-rounded" />
         </template>
       </NButton>
       <NButton
@@ -432,6 +504,40 @@ async function handleSourceFileClick(fileInfo: {
         </template>
       </NButton>
     </div>
+    <NModal
+      v-model:show="memoryDialogVisible"
+      preset="dialog"
+      title="保存到长期记忆"
+      :show-icon="false"
+      class="w-560px!"
+    >
+      <div class="flex flex-col gap-4">
+        <NInput
+          v-model:value="memoryForm.content"
+          type="textarea"
+          :rows="4"
+          maxlength="500"
+          show-count
+          placeholder="输入需要长期记住的稳定事实或偏好"
+        />
+        <div class="grid grid-cols-2 gap-3">
+          <div class="flex flex-col gap-1">
+            <NText class="text-12px color-#888">作用域</NText>
+            <NSelect v-model:value="memoryForm.scope" :options="memoryScopeOptions" />
+          </div>
+          <div class="flex flex-col gap-1">
+            <NText class="text-12px color-#888">类型</NText>
+            <NSelect v-model:value="memoryForm.type" :options="memoryTypeOptions" />
+          </div>
+        </div>
+      </div>
+      <template #action>
+        <div class="flex justify-end gap-2">
+          <NButton @click="memoryDialogVisible = false">取消</NButton>
+          <NButton type="primary" :loading="memorySubmitting" @click="handleSaveMemory">保存</NButton>
+        </div>
+      </template>
+    </NModal>
   </div>
 </template>
 

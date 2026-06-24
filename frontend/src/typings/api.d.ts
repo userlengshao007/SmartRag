@@ -440,6 +440,13 @@ declare namespace Api {
       feedbackRating?: 'good' | 'bad';
     }
 
+    interface MemorySaveResult {
+      id: number;
+      scope: 'USER' | 'CONVERSATION';
+      type: 'FACT' | 'PREFERENCE' | 'SUMMARY' | 'TOOL_RESULT';
+      content: string;
+    }
+
     interface Token {
       cmdToken: string;
     }
