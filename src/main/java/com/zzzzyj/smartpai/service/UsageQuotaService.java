@@ -5,6 +5,7 @@ import com.zzzzyj.smartpai.exception.RateLimitExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -19,7 +20,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
-//@Service
+@Service
 public class UsageQuotaService {
 
     private static final Logger logger = LoggerFactory.getLogger(UsageQuotaService.class);
