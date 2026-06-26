@@ -43,5 +43,11 @@ public class AiProperties {
         private Integer compressionRetainRecentRounds = 3;
         /** 摘要请求的最大输出 tokens。 */
         private Integer compressionSummaryMaxTokens = 800;
+        /** Map-Reduce 压缩时每个 map 分片包含的消息数，过大容易让单次摘要请求先超窗。 */
+        private Integer compressionMapChunkMessages = 5;
+        /** Map 阶段每个分片摘要的最大输出 tokens。 */
+        private Integer compressionMapSummaryMaxTokens = 300;
+        /** Reduce 阶段合并摘要的最大输出 tokens。 */
+        private Integer compressionReduceSummaryMaxTokens = 800;
     }
 }

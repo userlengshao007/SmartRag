@@ -1,8 +1,10 @@
 package com.zzzzyj.smartpai.controller;
 
 import com.zzzzyj.smartpai.handler.ChatWebSocketHandler;
+import com.zzzzyj.smartpai.model.ChatMemory;
 import com.zzzzyj.smartpai.service.AgentToolRegistry;
 import com.zzzzyj.smartpai.service.ChatGenerationStateService;
+import com.zzzzyj.smartpai.service.ChatMemoryService;
 import com.zzzzyj.smartpai.utils.JwtUtils;
 import com.zzzzyj.smartpai.utils.LogUtils;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/v1/chat")
@@ -25,13 +28,16 @@ public class ChatController {
     private final JwtUtils jwtUtils;
     private final ChatGenerationStateService chatGenerationStateService;
     private final AgentToolRegistry agentToolRegistry;
+    private final ChatMemoryService chatMemoryService;
 
     public ChatController(JwtUtils jwtUtils,
                           ChatGenerationStateService chatGenerationStateService,
-                          AgentToolRegistry agentToolRegistry) {
+                          AgentToolRegistry agentToolRegistry,
+                          ChatMemoryService chatMemoryService) {
         this.jwtUtils = jwtUtils;
         this.chatGenerationStateService = chatGenerationStateService;
         this.agentToolRegistry = agentToolRegistry;
+        this.chatMemoryService = chatMemoryService;
     }
     
     /**
@@ -117,6 +123,41 @@ public class ChatController {
         return ResponseEntity.ok(responseBody(200, "反馈已记录", result.data()));
     }
 
+    @PostMapping("/memories")
+    public ResponseEntity<?> saveMemory(@RequestHeader("Authorization") String token,
+                                        @RequestBody MemorySaveRequest request) {
+        String userId = extractValidatedUserId(token);
+        if (userId == null) {
+            return ResponseEntity.status(401).body(responseBody(401, "Invalid token", null));
+        }
+        if (request == null || request.content() == null || request.content().isBlank()) {
+            return ResponseEntity.badRequest().body(responseBody(400, "content 不能为空", null));
+        }
+
+        ChatMemory.MemoryScope scope = parseMemoryScope(request.scope());
+        ChatMemory.MemoryType type = parseMemoryType(request.type());
+        // 这个接口给前端“保存到记忆”按钮使用，避免用户一句“请记住”在聊天主链路里被多个自动入口重复保存。
+        Optional<ChatMemory> saved = chatMemoryService.storeMemory(
+                userId,
+                request.conversationId(),
+                scope,
+                type,
+                request.content(),
+                Map.of("source", "manual_memory_button")
+        );
+        if (saved.isEmpty()) {
+            return ResponseEntity.badRequest().body(responseBody(400, "记忆保存失败", null));
+        }
+
+        ChatMemory memory = saved.get();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("id", memory.getId());
+        data.put("scope", memory.getScope().name());
+        data.put("type", memory.getType().name());
+        data.put("content", memory.getContent());
+        return ResponseEntity.ok(responseBody(200, "记忆已保存", data));
+    }
+
     private String buildFeedbackReason(FeedbackRequest request) {
         StringBuilder reason = new StringBuilder();
         if (request.reason() != null && !request.reason().isBlank()) {
@@ -150,6 +191,18 @@ public class ChatController {
         return jwtUtils.extractUserIdFromToken(jwtToken);
     }
 
+    private ChatMemory.MemoryScope parseMemoryScope(String rawScope) {
+        return "conversation".equalsIgnoreCase(rawScope)
+                ? ChatMemory.MemoryScope.CONVERSATION
+                : ChatMemory.MemoryScope.USER;
+    }
+
+    private ChatMemory.MemoryType parseMemoryType(String rawType) {
+        return "preference".equalsIgnoreCase(rawType)
+                ? ChatMemory.MemoryType.PREFERENCE
+                : ChatMemory.MemoryType.FACT;
+    }
+
     private Map<String, Object> responseBody(int code, String message, Object data) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("code", code);
@@ -163,6 +216,14 @@ public class ChatController {
             String reason,
             String conversationId,
             String generationId
+    ) {
+    }
+
+    public record MemorySaveRequest(
+            String content,
+            String scope,
+            String type,
+            String conversationId
     ) {
     }
 }

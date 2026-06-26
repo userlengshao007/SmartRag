@@ -85,8 +85,9 @@ public class ReActContextCompressor {
         List<Map<String, Object>> oldMessages = copyMessages(messages.subList(systemEnd, splitIndex));
         List<Map<String, Object>> recentMessages = copyMessages(messages.subList(splitIndex, messages.size()));
         
-        // 调用LLM生成早期消息的摘要
-        String summary = summarize(requesterId, oldMessages);
+        // 旧区间可能包含多轮工具结果，直接一次性摘要容易让压缩请求本身超窗。
+        // 这里按固定消息数做 Map-Reduce：每片先压短摘要，再把多个短摘要合并成最终摘要。
+        String summary = summarizeMapReduce(requesterId, oldMessages);
         if (summary == null || summary.isBlank()) {
             logger.warn("ReAct context compression skipped: summary is blank");
             return CompressionResult.notCompressed(beforeTokens, beforeTokens, trigger);
@@ -117,17 +118,49 @@ public class ReActContextCompressor {
      * @param oldMessages 需要被摘要的早期消息列表
      * @return 生成的摘要文本，如果摘要失败则返回null
      */
-    private String summarize(String requesterId, List<Map<String, Object>> oldMessages) {
+    private String summarizeMapReduce(String requesterId, List<Map<String, Object>> oldMessages) {
         try {
-            return llmProviderRouter.summarizeMessagesForCompaction(
+            List<List<Map<String, Object>>> chunks = partitionMessages(oldMessages, mapChunkMessages());
+            List<String> chunkSummaries = new ArrayList<>();
+            for (List<Map<String, Object>> chunk : chunks) {
+                String chunkSummary = llmProviderRouter.summarizeMessagesForCompaction(
+                        requesterId,
+                        chunk,
+                        mapSummaryMaxTokens()
+                );
+                if (chunkSummary == null || chunkSummary.isBlank()) {
+                    logger.warn("ReAct context compression skipped: blank map summary");
+                    return null;
+                }
+                chunkSummaries.add(chunkSummary.trim());
+            }
+            if (chunkSummaries.isEmpty()) {
+                return null;
+            }
+            if (chunkSummaries.size() == 1) {
+                return chunkSummaries.get(0);
+            }
+            return llmProviderRouter.mergeCompactionSummaries(
                     requesterId,
-                    oldMessages,
-                    summaryMaxTokens()
+                    chunkSummaries,
+                    reduceSummaryMaxTokens()
             );
         } catch (Exception exception) {
             logger.warn("ReAct context compression failed; continue with original messages", exception);
             return null;
         }
+    }
+
+    private List<List<Map<String, Object>>> partitionMessages(List<Map<String, Object>> messages, int chunkSize) {
+        List<List<Map<String, Object>>> chunks = new ArrayList<>();
+        if (messages == null || messages.isEmpty()) {
+            return chunks;
+        }
+        int safeChunkSize = Math.max(chunkSize, 1);
+        for (int i = 0; i < messages.size(); i += safeChunkSize) {
+            chunks.add(copyMessages(messages.subList(i, Math.min(i + safeChunkSize, messages.size()))));
+        }
+        return chunks;
     }
 
     /**
@@ -217,6 +250,24 @@ public class ReActContextCompressor {
      */
     private int summaryMaxTokens() {
         return Math.max(valueOrDefault(aiProperties.getGeneration().getCompressionSummaryMaxTokens(), 800), 128);
+    }
+
+    private int mapChunkMessages() {
+        return Math.max(valueOrDefault(aiProperties.getGeneration().getCompressionMapChunkMessages(), 5), 1);
+    }
+
+    private int mapSummaryMaxTokens() {
+        return Math.max(valueOrDefault(
+                aiProperties.getGeneration().getCompressionMapSummaryMaxTokens(),
+                Math.min(summaryMaxTokens(), 300)
+        ), 128);
+    }
+
+    private int reduceSummaryMaxTokens() {
+        return Math.max(valueOrDefault(
+                aiProperties.getGeneration().getCompressionReduceSummaryMaxTokens(),
+                summaryMaxTokens()
+        ), 128);
     }
 
     /**

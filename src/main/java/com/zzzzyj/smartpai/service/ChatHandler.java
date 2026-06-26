@@ -61,6 +61,7 @@ public class ChatHandler {
     private final AgentToolRegistry agentToolRegistry;
     private final ReActContextCompressor reActContextCompressor;
     private final ChatMemoryService chatMemoryService;
+    private final ChatMemoryManager chatMemoryManager;
     private final ThreadPoolTaskExecutor chatMonitorExecutor;
     private final ObjectMapper objectMapper;
     
@@ -74,6 +75,8 @@ public class ChatHandler {
     private final Map<String, Boolean> stopFlags = new ConcurrentHashMap<>();
     // 用于标记已经取消的生成任务，防止后续又被落成 completed
     private final KeySetView<String, Boolean> cancelledGenerations = ConcurrentHashMap.newKeySet();
+    // 标记本轮是否已经通过 save_memory 工具保存过记忆，避免收尾自动抽取重复写入同一轮显式记忆。
+    private final KeySetView<String, Boolean> memorySavedGenerations = ConcurrentHashMap.newKeySet();
     // 用于存储每次生成任务的引用映射：generationId -> {referenceNumber -> detail}
     private final Map<String, Map<Integer, ReferenceInfo>> generationReferenceMappings = new ConcurrentHashMap<>();
 
@@ -87,6 +90,7 @@ public class ChatHandler {
                       AgentToolRegistry agentToolRegistry,
                       ReActContextCompressor reActContextCompressor,
                       ChatMemoryService chatMemoryService,
+                      ChatMemoryManager chatMemoryManager,
                       ObjectMapper objectMapper,
                       @Qualifier("chatMonitorExecutor") ThreadPoolTaskExecutor chatMonitorExecutor) {
         this.redisTemplate = redisTemplate;
@@ -99,6 +103,7 @@ public class ChatHandler {
         this.agentToolRegistry = agentToolRegistry;
         this.reActContextCompressor = reActContextCompressor;
         this.chatMemoryService = chatMemoryService;
+        this.chatMemoryManager = chatMemoryManager;
         this.objectMapper = objectMapper;
         this.chatMonitorExecutor = chatMonitorExecutor;
     }
@@ -113,7 +118,6 @@ public class ChatHandler {
             // 1. 获取或创建会话 ID
             conversationId = getOrCreateConversationId(userId);
             conversationService.ensureConversationSession(Long.parseLong(userId), conversationId, userMessage);
-            chatMemoryService.storeExplicitMemoryHint(userId, conversationId, userMessage);
             ChatGenerationStateService.GenerationSnapshot generation =
                     chatGenerationStateService.createGeneration(userId, conversationId, userMessage);
             generationId = generation.generationId();
@@ -200,7 +204,7 @@ public class ChatHandler {
                               String generationId,
                               List<Map<String, String>> history,
                               CompletableFuture<String> responseFuture) {
-        String memoryContext = chatMemoryService.buildMemoryContext(
+        String memoryContext = chatMemoryManager.buildPromptMemoryContext(
                 userId,
                 conversationId,
                 userMessage,
@@ -213,6 +217,7 @@ public class ChatHandler {
                 buildRecentFeedbackGuidance(userId), // 用户对回答的满意或者是不满意，如果是满意需要参考这类回答，如果是不满意要避免此类回答
                 memoryContext
         );
+        chatMemoryManager.rememberUserMessage(userId, conversationId, userMessage);
         int executedToolCalls = 0; // 已执行的工具调用次数
         int totalPromptTokens = 0; // 总输入Token数
         int totalCompletionTokens = 0; // 总输出Token数
@@ -294,6 +299,7 @@ public class ChatHandler {
                 }
                 // 把工具结果加入消息历史
                 messages.add(toolMessage(toolCall.id(), executedToolResult.content()));
+                chatMemoryManager.rememberToolResult(userId, conversationId, toolCall.name(), executedToolResult.content());
                 // 工具说已经流式输出给用户了
                 if (executedToolResult.streamedToUser()) {
                     finalizeResponse(userId, userMessage, conversationId, generationId, responseFuture,
@@ -367,6 +373,9 @@ public class ChatHandler {
             // 真正执行工具
             AgentToolRegistry.ToolExecutionResult toolResult =
                     agentToolRegistry.executeTool(toolCall.name(), toolCall.arguments(), userId, conversationId, toolChunkConsumer);
+            if ("save_memory".equals(toolCall.name()) && toolResult.success()) {
+                memorySavedGenerations.add(generationId);
+            }
 
             // search_knowledge 返回的 SearchResult 列表与模型 prompt 中的 [N] 编号一一对应，
             // 必须把它落到 generationReferenceMappings 里，否则前端点击引用拿不到 MD5/页码。
@@ -594,7 +603,12 @@ public class ChatHandler {
         boolean persisted = persistConversation(userId, userMessage, completeResponse, conversationId, referenceMappings);
         if (persisted) {
             updateConversationHistory(conversationId, userMessage, completeResponse, referenceMappings);
-            extractLongTermMemoryAsync(userId, userMessage, completeResponse, conversationId, generationId);
+            chatMemoryManager.rememberAssistantMessage(userId, conversationId, completeResponse);
+            if (memorySavedGenerations.contains(generationId)) {
+                logger.info("本轮已通过 save_memory 工具保存记忆，跳过收尾自动记忆抽取: generationId={}", generationId);
+            } else {
+                extractLongTermMemoryAsync(userId, userMessage, completeResponse, conversationId, generationId);
+            }
         } else {
             logger.warn("MySQL 落库失败，跳过 Redis 会话历史写入以保持两端一致: generationId={}, conversationId={}",
                     generationId, conversationId);
@@ -675,6 +689,7 @@ public class ChatHandler {
         stopFlags.remove(generationId);
         activeStreams.remove(generationId);
         cancelledGenerations.remove(generationId);
+        memorySavedGenerations.remove(generationId);
         CompletableFuture<String> future = responseFutures.remove(generationId);
         if (throwable != null && future != null && !future.isDone()) {
             future.completeExceptionally(throwable);

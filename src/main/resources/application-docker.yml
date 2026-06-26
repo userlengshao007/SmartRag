@@ -166,3 +166,6 @@ ai:
     compression-trigger-ratio: ${AI_CONTEXT_COMPRESSION_TRIGGER_RATIO:0.9}
     compression-retain-recent-rounds: ${AI_CONTEXT_COMPRESSION_RETAIN_RECENT_ROUNDS:3}
     compression-summary-max-tokens: ${AI_CONTEXT_COMPRESSION_SUMMARY_MAX_TOKENS:800}
+    compression-map-chunk-messages: ${AI_CONTEXT_COMPRESSION_MAP_CHUNK_MESSAGES:5}
+    compression-map-summary-max-tokens: ${AI_CONTEXT_COMPRESSION_MAP_SUMMARY_MAX_TOKENS:300}
+    compression-reduce-summary-max-tokens: ${AI_CONTEXT_COMPRESSION_REDUCE_SUMMARY_MAX_TOKENS:800}

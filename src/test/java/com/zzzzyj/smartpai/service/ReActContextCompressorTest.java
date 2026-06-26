@@ -13,9 +13,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,6 +51,40 @@ class ReActContextCompressorTest {
         assertEquals("recent question 1", messages.get(3).get("content"));
         assertEquals("recent question 2", messages.get(5).get("content"));
         verify(router).summarizeMessagesForCompaction(eq("u1"), any(), anyInt());
+        verify(router, never()).mergeCompactionSummaries(any(), anyList(), anyInt());
+    }
+
+    @Test
+    void compressesOldTurnsWithMapReduceWhenMultipleChunks() {
+        AiProperties aiProperties = aiProperties(8000, 0.5d, 1);
+        aiProperties.getGeneration().setCompressionMapChunkMessages(2);
+        ChatTokenEstimator estimator = mock(ChatTokenEstimator.class);
+        LlmProviderRouter router = mock(LlmProviderRouter.class);
+        ReActContextCompressor compressor = new ReActContextCompressor(aiProperties, estimator, router);
+        List<Map<String, Object>> messages = new ArrayList<>(List.of(
+                message("system", "rules"),
+                message("user", "old question 1"),
+                message("assistant", "old answer 1"),
+                message("user", "old question 2"),
+                message("assistant", "old answer 2"),
+                message("user", "old question 3"),
+                message("assistant", "old answer 3"),
+                message("user", "recent question")
+        ));
+
+        when(estimator.estimateReActRequestTokens(eq(messages), any())).thenReturn(5000, 2600);
+        when(router.summarizeMessagesForCompaction(eq("u1"), any(), anyInt()))
+                .thenReturn("map-1", "map-2", "map-3");
+        when(router.mergeCompactionSummaries(eq("u1"), anyList(), anyInt())).thenReturn("merged summary");
+
+        ReActContextCompressor.CompressionResult result =
+                compressor.compressIfNeeded("u1", messages, List.of());
+
+        assertTrue(result.compressed());
+        assertEquals("[已压缩的历史对话摘要]\nmerged summary", messages.get(1).get("content"));
+        assertEquals("recent question", messages.get(3).get("content"));
+        verify(router, times(3)).summarizeMessagesForCompaction(eq("u1"), any(), anyInt());
+        verify(router).mergeCompactionSummaries(eq("u1"), anyList(), anyInt());
     }
 
     @Test

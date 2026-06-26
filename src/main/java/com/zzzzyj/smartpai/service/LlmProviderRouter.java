@@ -145,8 +145,8 @@ public class LlmProviderRouter {
             sysBuilder.append(promptCfg.getRules()).append("\n\n");
         }
         if (memoryContext != null && !memoryContext.isBlank()) {
-            // 长期记忆来自当前用户可见范围，只作为回答偏好和稳定事实参考，不替代知识库检索。
-            sysBuilder.append("相关长期记忆：\n")
+            // 记忆上下文只作为偏好、稳定事实和近期运行态参考，不替代知识库检索。
+            sysBuilder.append("相关记忆上下文：\n")
                     .append(memoryContext.trim())
                     .append("\n\n");
         }
@@ -347,6 +347,47 @@ public class LlmProviderRouter {
         } catch (Exception exception) {
             usageQuotaService.abortReservation(reservation);
             throw new RuntimeException("上下文压缩摘要生成失败", exception);
+        }
+    }
+
+    public String mergeCompactionSummaries(String requesterId,
+                                           List<String> summaries,
+                                           int maxCompletionTokens) {
+        ModelProviderConfigService.ActiveProviderView provider =
+                modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
+        List<Map<String, Object>> summaryMessages = buildCompactionReduceMessages(summaries);
+        int normalizedMaxTokens = Math.max(maxCompletionTokens, 128);
+        int estimatedPromptTokens = chatTokenEstimator.estimateMessagesTokens(summaryMessages);
+        UsageQuotaService.TokenReservationBundle reservation = rateLimitService.reserveLlmUsage(
+                requesterId, estimatedPromptTokens, normalizedMaxTokens);
+
+        try {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("model", provider.model());
+            request.put("messages", summaryMessages);
+            request.put("stream", false);
+            request.put("max_tokens", normalizedMaxTokens);
+            request.put("temperature", 0.2d);
+
+            String responseBody = buildClient(provider)
+                    .post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(60));
+
+            JsonNode root = objectMapper.readTree(responseBody);
+            String summary = root.path("choices").path(0).path("message").path("content").asText("").trim();
+            JsonNode usage = root.path("usage");
+            int promptTokens = usage.path("prompt_tokens").asInt(estimatedPromptTokens);
+            int completionTokens = usage.path("completion_tokens").asInt(chatTokenEstimator.estimateTextTokens(summary));
+            usageQuotaService.settleReservation(reservation, promptTokens + completionTokens);
+            return summary;
+        } catch (Exception exception) {
+            usageQuotaService.abortReservation(reservation);
+            throw new RuntimeException("上下文压缩摘要合并失败", exception);
         }
     }
 
@@ -708,6 +749,44 @@ public class LlmProviderRouter {
         summaryMessages.add(newMessage("system", "你是对话上下文压缩器，只输出摘要本身。"));
         summaryMessages.add(newMessage("user", prompt));
         return summaryMessages;
+    }
+
+    private List<Map<String, Object>> buildCompactionReduceMessages(List<String> summaries) {
+        StringBuilder joined = new StringBuilder();
+        if (summaries != null) {
+            for (int i = 0; i < summaries.size(); i++) {
+                String summary = summaries.get(i);
+                if (summary == null || summary.isBlank()) {
+                    continue;
+                }
+                joined.append("片段 ").append(i + 1).append(":\n")
+                        .append(summary.trim())
+                        .append("\n\n---\n\n");
+                // Reduce 请求也需要硬限制，防止大量 map 摘要叠加后再次超窗。
+                if (joined.length() > 60_000) {
+                    joined.append("...(后续片段摘要已截断)\n");
+                    break;
+                }
+            }
+        }
+
+        String prompt = """
+                请将以下多个 ReAct 历史片段摘要合并成一个整体摘要，保留：
+                1. 用户目标、约束和上下文指代；
+                2. 已完成的重要操作和结论；
+                3. 工具返回的核心结果、引用线索和仍未解决的问题。
+
+                不要编造新事实，不要输出标题，不要使用列表，输出 1-3 段中文摘要。
+
+                === 片段摘要 ===
+                %s
+                === 片段摘要结束 ===
+                """.formatted(joined);
+
+        List<Map<String, Object>> reduceMessages = new ArrayList<>();
+        reduceMessages.add(newMessage("system", "你是对话摘要合并器，只输出合并后的摘要本身。"));
+        reduceMessages.add(newMessage("user", prompt));
+        return reduceMessages;
     }
 
     private ReActTurn parseReActTurn(String responseBody, int estimatedPromptTokens) {
