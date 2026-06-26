@@ -8,7 +8,7 @@ SmartRag 是一个面向企业/团队内部知识库场景的智能问答系统�
 
 ## 系统架构图
 
-![Untitled diagram-2026-06-26-082545](README.assets/Untitled diagram-2026-06-26-082545.png)
+![系统架构图](README.assets/system-architecture-20260626.png)
 
 ## 系统设计文档
 
