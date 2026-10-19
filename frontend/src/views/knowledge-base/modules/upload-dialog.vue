@@ -35,11 +35,12 @@ const rules = ref<FormRules>({
 
 const fileSizeLimitError = computed(() => {
   if (authStore.isAdmin) return '';
-  const file = model.value.fileList?.[0]?.file;
-  if (!file || !model.value.uploadMaxSizeBytes) return '';
-  if (file.size <= model.value.uploadMaxSizeBytes) return '';
+  const limit = model.value.uploadMaxSizeBytes;
+  if (!limit) return '';
+  const oversizedFiles = (model.value.fileList ?? []).filter(item => item.file && item.file.size > limit);
+  if (oversizedFiles.length === 0) return '';
 
-  return `当前组织限制非管理员上传文件不超过 ${model.value.uploadMaxSizeMb} MB，当前文件大小为 ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+  return `当前组织限制非管理员每个文件不超过 ${model.value.uploadMaxSizeMb} MB，${oversizedFiles.length} 个文件超限：${oversizedFiles.map(item => item.name).join('、')}`;
 });
 
 const submitDisabled = computed(() => loading.value || Boolean(fileSizeLimitError.value));
@@ -50,13 +51,21 @@ function close() {
 
 const store = useKnowledgeBaseStore();
 async function handleSubmit() {
+  if (loading.value) return;
   await validate();
-  if (fileSizeLimitError.value) return;
+  if (loading.value || fileSizeLimitError.value) return;
 
   loading.value = true;
-  await store.enqueueUpload(model.value);
-  loading.value = false;
-  close();
+  try {
+    const { failedIds } = await store.enqueueUpload(model.value);
+    if (failedIds.length > 0) {
+      model.value.fileList = model.value.fileList?.filter(item => failedIds.includes(item.id));
+      return;
+    }
+    close();
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function presetSingleOrgForUser() {
@@ -105,10 +114,20 @@ function onUpdate(option: unknown) {
     title="文件上传"
     :show-icon="false"
     :mask-closable="false"
+    :close-on-esc="!loading"
+    :closable="!loading"
     class="w-500px!"
     @positive-click="handleSubmit"
   >
-    <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="100" mt-10>
+    <NForm
+      ref="formRef"
+      :model="model"
+      :rules="rules"
+      :disabled="loading"
+      label-placement="left"
+      :label-width="100"
+      mt-10
+    >
       <NFormItem v-if="authStore.isAdmin" label="组织标签" path="orgTag">
         <OrgTagCascader v-model:value="model.orgTag" @change="onUpdate" />
       </NFormItem>
@@ -132,28 +151,33 @@ function onUpdate(option: unknown) {
           </NSpace>
         </NRadioGroup>
       </NFormItem>
-      <NFormItem label="标签描述" path="fileList">
-        <NUpload
-          v-model:file-list="model.fileList"
-          :accept="uploadAccept"
-          :max="1"
-          :multiple="false"
-          :default-upload="false"
-        >
-          <NButton>上传文件</NButton>
-        </NUpload>
-        <div v-if="fileSizeLimitError" class="mt-8px text-12px text-#ef4444">
-          {{ fileSizeLimitError }}
-        </div>
-        <div v-else-if="!authStore.isAdmin && model.uploadMaxSizeMb" class="mt-8px text-12px text-#d97706">
-          当前组织限制非管理员上传文件不超过 {{ model.uploadMaxSizeMb }} MB
+      <NFormItem label="上传文件" path="fileList">
+        <div class="w-full">
+          <NUpload
+            v-model:file-list="model.fileList"
+            :accept="uploadAccept"
+            multiple
+            :disabled="loading"
+            :default-upload="false"
+          >
+            <NButton :disabled="loading">选择文件（可多选）</NButton>
+          </NUpload>
+          <div v-if="fileSizeLimitError" class="mt-8px text-12px text-#ef4444">
+            {{ fileSizeLimitError }}
+          </div>
+          <div v-else-if="!authStore.isAdmin && model.uploadMaxSizeMb" class="mt-8px text-12px text-#d97706">
+            当前组织限制非管理员每个文件不超过 {{ model.uploadMaxSizeMb }} MB
+          </div>
+          <div class="mt-8px text-12px text-gray-500">
+            已选择 {{ model.fileList?.length || 0 }} 个文件，统一使用当前组织标签和公开设置
+          </div>
         </div>
       </NFormItem>
     </NForm>
     <template #action>
       <NSpace :size="16">
-        <NButton @click="close">取消</NButton>
-        <NButton type="primary" :disabled="submitDisabled" @click="handleSubmit">保存</NButton>
+        <NButton :disabled="loading" @click="close">取消</NButton>
+        <NButton type="primary" :loading="loading" :disabled="submitDisabled" @click="handleSubmit">开始上传</NButton>
       </NSpace>
     </template>
   </NModal>

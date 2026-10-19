@@ -112,17 +112,42 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
     }
   }
 
-  /**
-   * 异步函数：将上传请求加入队列
-   *
-   * 本函数处理上传任务的排队和初始化工作它首先检查是否存在相同的文件， 如果不存在，则创建一个新的上传任务，并将其添加到任务队列中最后启动上传流程
-   *
-   * @param form 包含上传信息的表单，包括文件列表和是否公开的标签
-   * @returns 返回一个上传任务对象，无论是已存在的还是新创建的
-   */
+  /** 将所选文件逐个加入队列，单个文件失败不影响其他文件。 */
   async function enqueueUpload(form: Api.KnowledgeBase.Form) {
-    // 获取文件列表中的第一个文件
-    const file = form.fileList![0].file!;
+    const fileList = [...(form.fileList ?? [])];
+    const failedIds: string[] = [];
+    let queued = 0;
+    let skipped = 0;
+
+    for (const item of fileList) {
+      if (!item.file || item.file.size === 0) {
+        failedIds.push(item.id);
+      } else {
+        try {
+          // 按顺序计算哈希，避免批量读取大文件占用过多内存。
+          // eslint-disable-next-line no-await-in-loop
+          const added = await enqueueFile(item.file, form);
+          if (added) {
+            queued += 1;
+          } else {
+            skipped += 1;
+          }
+        } catch {
+          failedIds.push(item.id);
+        }
+      }
+    }
+
+    const summary = `已加入上传队列 ${queued} 个文件，跳过重复文件 ${skipped} 个，失败 ${failedIds.length} 个`;
+    if (failedIds.length > 0) {
+      window.$message?.warning(`${summary}；请检查剩余文件是否为空或无法读取后重试`);
+    } else {
+      window.$message?.success(summary);
+    }
+    return { failedIds };
+  }
+
+  async function enqueueFile(file: File, form: Api.KnowledgeBase.Form): Promise<boolean> {
     // 计算文件的MD5值，用于唯一标识文件
     const md5 = await calculateMD5(file);
 
@@ -131,15 +156,13 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
     if (existingTask) {
       // 如果存在相同文件，直接返回该上传任务
       if (existingTask.status === UploadStatus.Completed) {
-        window.$message?.error('文件已存在');
-        return;
+        return false;
       } else if (existingTask.status === UploadStatus.Pending || existingTask.status === UploadStatus.Uploading) {
-        window.$message?.error('文件正在上传中');
-        return;
+        return false;
       } else if (existingTask.status === UploadStatus.Break) {
         existingTask.status = UploadStatus.Pending;
         startUpload();
-        return;
+        return true;
       }
     }
 
@@ -167,7 +190,7 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
     tasks.value.push(newTask);
     // 启动上传流程
     startUpload();
-    // 返回新的上传任务
+    return true;
   }
 
   /** 启动文件上传的异步函数 该函数负责从待上传队列中启动文件上传任务，并管理并发上传的数量 */
