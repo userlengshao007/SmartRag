@@ -168,6 +168,7 @@ const local: App.I18n.Schema = {
     'knowledge-base': 'Knowledge Base',
     'model-provider': 'Model Providers',
     'org-tag': 'Organization Tag',
+    'rag-eval': 'RAG Evaluation',
     'usage-monitor': 'Usage Monitor',
     user: 'User Management',
     'personal-center': 'Personal Center',

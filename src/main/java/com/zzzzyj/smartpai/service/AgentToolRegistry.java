@@ -363,7 +363,7 @@ public class AgentToolRegistry {
         return schema;
     }
 
-    private String formatSearchResults(List<SearchResult> results) {
+    public static String formatSearchResults(List<SearchResult> results) {
         if (results == null || results.isEmpty()) {
             return "未检索到相关知识库片段。";
         }
@@ -438,7 +438,7 @@ public class AgentToolRegistry {
         return Math.max(min, Math.min(max, value));
     }
 
-    private String limitText(String text, int maxChars) {
+    private static String limitText(String text, int maxChars) {
         if (text == null) {
             return "";
         }

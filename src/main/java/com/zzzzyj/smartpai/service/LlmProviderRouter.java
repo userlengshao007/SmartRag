@@ -643,6 +643,21 @@ public class LlmProviderRouter {
         return request;
     }
 
+    /** 构建离线评测消息，复用在线 RAG 的提示词和引用边界。 */
+    public List<Map<String, Object>> buildRagMessages(String question, String context) {
+        return buildMessages(question, context, List.of()).stream()
+                .map(message -> Map.<String, Object>of("role", message.get("role"),
+                        "content", message.get("content")))
+                .toList();
+    }
+
+    /** 返回评测时激活的模型，写入报告配置快照。 */
+    public String primaryProviderDescription() {
+        ModelProviderConfigService.ActiveProviderView provider =
+                modelProviderConfigService.getActiveProvider(ModelProviderConfigService.SCOPE_LLM);
+        return provider.provider() + "/" + provider.model();
+    }
+
     private List<Map<String, String>> buildMessages(String userMessage,
                                                     String context,
                                                     List<Map<String, String>> history) {

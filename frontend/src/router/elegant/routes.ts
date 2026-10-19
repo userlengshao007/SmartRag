@@ -146,6 +146,18 @@ export const generatedRoutes: GeneratedRoute[] = [
     }
   },
   {
+    name: 'rag-eval',
+    path: '/rag-eval',
+    component: 'layout.base$view.rag-eval',
+    meta: {
+      title: 'rag-eval',
+      i18nKey: 'route.rag-eval',
+      roles: ['ADMIN'],
+      icon: 'solar:chart-square-line-duotone',
+      order: 8
+    }
+  },
+  {
     name: 'recharge',
     path: '/recharge',
     component: 'layout.base$view.recharge',

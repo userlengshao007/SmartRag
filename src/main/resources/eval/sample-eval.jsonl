@@ -1,0 +1,4 @@
+# 格式示例；请将文件名、问题、参考答案和证据短语替换成你已上传知识库的真实内容，再运行评测。
+{"id":"fact-01","question":"示例系统使用什么数据库？","expectedFileNames":["smartrag.pdf"],"expectedEvidence":["MySQL 8.0"],"referenceAnswer":"使用 MySQL 8.0。"}
+{"id":"para-01","question":"示例系统把文件存在哪里？","expectedFileNames":["smartrag.pdf"],"expectedEvidence":["MinIO"],"referenceAnswer":"文件存储在 MinIO 对象存储中。"}
+{"id":"fact-02","question":"示例系统通过什么组件异步处理文件？","expectedFileNames":["smartrag.pdf"],"expectedEvidence":["Kafka"],"referenceAnswer":"使用 Kafka 异步处理文件。"}

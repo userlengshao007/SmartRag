@@ -168,6 +168,7 @@ const local: App.I18n.Schema = {
     'knowledge-base': '知识库',
     'model-provider': '模型配置',
     'org-tag': '组织标签',
+    'rag-eval': 'RAG 评测',
     'usage-monitor': '用量监控',
     user: '用户管理',
     'personal-center': '个人中心',

@@ -19,4 +19,16 @@ public class AsyncExecutorConfig {
         executor.initialize();
         return executor;
     }
+    /** 隔离离线评测模型调用，限制超时请求占用的线程和排队数量。 */
+    @Bean(name = "evalLlmExecutor")
+    public ThreadPoolTaskExecutor evalLlmExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("rag-eval-llm-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(2);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
 }

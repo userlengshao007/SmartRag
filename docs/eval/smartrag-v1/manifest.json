@@ -1,0 +1,114 @@
+{
+  "name": "smartrag-eval-v1",
+  "createdOn": "2026-10-17",
+  "cases": 50,
+  "types": {
+    "fact": 18,
+    "para": 12,
+    "multi": 8,
+    "boundary": 6,
+    "neg": 6
+  },
+  "documents": [
+    {
+      "fileName": "smartrag-01-architecture-v1.txt",
+      "characters": 1188,
+      "sha256": "1f33bd4be39d1618cdb6ec54a2bbeef844b1ded98b25a25f521f39a186c90278",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "pom.xml",
+        "frontend/package.json",
+        "src/main/java/com/zzzzyj/smartpai/service/HybridSearchService.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-02-upload-v1.txt",
+      "characters": 1219,
+      "sha256": "9841d0133fd4afa64e0589b7573cb1a44bd30cd3e28ed3c98c2852d343ced937",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/service/UploadService.java",
+        "src/main/java/com/zzzzyj/smartpai/service/ParseService.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-03-chunking-v1.txt",
+      "characters": 1217,
+      "sha256": "3b234ff1aa058f89867b556cdf613eeaa155e6c89976eac7874caea30c8357a9",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/service/ParseService.java",
+        "src/main/resources/application.yml"
+      ]
+    },
+    {
+      "fileName": "smartrag-04-retrieval-v1.txt",
+      "characters": 1169,
+      "sha256": "c9fb375c27ede165896c015e995317abf19b6e6ce03083929f5efde4fc1bfd47",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/service/HybridSearchService.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-05-access-v1.txt",
+      "characters": 1158,
+      "sha256": "2cb75a2ca90f4bd8af53ff94ef55ec2d930402d449ecf6c9a3a2472ed3aaa44e",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/config/SecurityConfig.java",
+        "src/main/java/com/zzzzyj/smartpai/service/UserService.java",
+        "src/main/java/com/zzzzyj/smartpai/service/HybridSearchService.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-06-chat-v1.txt",
+      "characters": 1131,
+      "sha256": "b21d978d1b6b23721197157875df65c4163f667969f255249e1bce240fdedd93",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/service/AgentToolRegistry.java",
+        "src/main/java/com/zzzzyj/smartpai/service/LlmProviderRouter.java",
+        "src/main/java/com/zzzzyj/smartpai/service/eval/RagEvalCaseRunner.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-07-evaluation-v1.txt",
+      "characters": 1465,
+      "sha256": "ec519c1cd8c4d77cf784f8109ee8691d3ae11cc079c4e85518d7f843bb7ab268",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "src/main/java/com/zzzzyj/smartpai/service/eval/RetrievalMetrics.java",
+        "src/main/java/com/zzzzyj/smartpai/config/RagEvalProperties.java",
+        "src/main/java/com/zzzzyj/smartpai/controller/RagEvalAdminController.java",
+        "frontend/src/views/rag-eval/index.vue"
+      ]
+    },
+    {
+      "fileName": "smartrag-08-operations-v1.txt",
+      "characters": 1428,
+      "sha256": "5b14b961eb80d1c558d4f17ccfa1694f22fec428b749cb4ced6587315ba2c072",
+      "kind": "repository-derived",
+      "sourceFiles": [
+        "frontend/package.json",
+        "frontend/vite.config.ts",
+        "src/main/java/com/zzzzyj/smartpai/config/EsConfig.java",
+        "src/main/java/com/zzzzyj/smartpai/service/eval/RagEvalService.java"
+      ]
+    },
+    {
+      "fileName": "smartrag-09-archive-distractor-v1.txt",
+      "characters": 983,
+      "sha256": "c65d68752a37fd524e30d8a105e0c3de21e61545071dc7bae9c83b2e289ea0aa",
+      "kind": "synthetic-distractor",
+      "sourceFiles": []
+    },
+    {
+      "fileName": "smartrag-10-search-distractor-v1.txt",
+      "characters": 1001,
+      "sha256": "499b7fe54157c74f933ba5ce5d4453b489fd66c98c182728f83a5c550f1430cb",
+      "kind": "synthetic-distractor",
+      "sourceFiles": []
+    }
+  ]
+}

@@ -83,3 +83,7 @@ frontend/AutoClaw.pem
 *.pem
 src/main/resources/cert
 /.runtime
+
+# Local RAG evaluation reports and datasets
+/eval-reports/
+/eval-datasets/
