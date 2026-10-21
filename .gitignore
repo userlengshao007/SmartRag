@@ -30,6 +30,8 @@ frontend_old/
 .vite-ssg-dist
 .vite-ssg-temp
 .env
+.env.*
+!.env.example
 *.local
 dist
 dist-ssr

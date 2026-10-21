@@ -94,7 +94,23 @@ public record EvalCaseResult(
                          Double precisionAtK,
                          int irrelevantInTopK,
                          int returnedCount,
-                         List<RetrievedChunk> candidates) {
+                         List<RetrievedChunk> candidates,
+                         Comparison comparison) {
+        /** 兼容已有阶段数据的构造方式。 */
+        public Stages(Boolean candidateHit, int candidateCount, Integer relevantInCandidates, Double ndcgAtK,
+                      Boolean bm25Hit, Integer bm25FirstRank, Boolean knnHit, Integer knnFirstRank,
+                      int thresholdDroppedInTopK, Double precisionAtK, int irrelevantInTopK,
+                      int returnedCount, List<RetrievedChunk> candidates) {
+            this(candidateHit, candidateCount, relevantInCandidates, ndcgAtK, bm25Hit, bm25FirstRank,
+                    knnHit, knnFirstRank, thresholdDroppedInTopK, precisionAtK, irrelevantInTopK,
+                    returnedCount, candidates, null);
+        }
+    }
+
+    /** 同一候选池的前后对比；reranked 包含全部候选在阈值过滤前的模型排名与分数。 */
+    public record Comparison(String rerankStatus, Boolean rrfHit, Integer rrfFirstRank,
+                             Double rrfReciprocalRank, Boolean rerankHit, Integer rerankFirstRank,
+                             Double rerankReciprocalRank, String change, List<RetrievedChunk> reranked) {
     }
 
     public boolean judged() {

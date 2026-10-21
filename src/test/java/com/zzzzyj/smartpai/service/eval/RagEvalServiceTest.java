@@ -63,11 +63,16 @@ class RagEvalServiceTest {
         JsonNode report = service.readReport(submitted.runId()).orElseThrow();
         assertEquals("chunk_512_重叠_64", report.get("label").asText());
         assertEquals(3, report.get("topK").asInt());
+        assertEquals("BM25 + KNN + RRF + RERANK", report.path("config").path("retrievalPipeline").asText());
+        assertTrue(report.path("config").path("rerankEnabled").asBoolean());
+        assertEquals("gte-rerank-v2", report.path("config").path("rerankModel").asText());
+        assertEquals(0.1, report.path("config").path("rerankScoreThreshold").asDouble());
+        assertFalse(report.path("config").has("apiKey"));
         assertEquals(1.0, report.get("summary").get("accuracy").asDouble(), 1e-9);
         assertEquals("OK", report.get("cases").get(0).get("diagnosis").asText());
         assertTrue(report.get("diagnosisGuide").has("PROMPT_OR_MODEL"));
         assertFalse(report.get("config").get("parentContextEnabled").asBoolean());
-        assertFalse(report.get("config").get("stageMetricsAvailable").asBoolean());
+        assertTrue(report.get("config").get("stageMetricsAvailable").asBoolean());
         assertFalse(report.get("config").get("contextualRetrievalEnabled").asBoolean());
     }
 

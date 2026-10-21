@@ -32,7 +32,8 @@ import java.util.stream.Collectors;
  * <ol>
  *   <li>ES BM25 召回（纯文本关键词匹配）</li>
  *   <li>ES KNN 召回（向量近邻搜索，使用 dense_vector 字段）</li>
- *   <li>RRF（Reciprocal Rank Fusion）融合两路结果，返回最终 topK</li>
+ *   <li>RRF（Reciprocal Rank Fusion）融合两路结果，保留精排候选</li>
+ *   <li>gte-rerank 精排、过滤低分结果后返回最多 topK</li>
  * </ol>
  *
  * <p>降级策略：
@@ -68,6 +69,9 @@ public class HybridSearchService {
     @Autowired
     private FileUploadRepository fileUploadRepository;
 
+    @Autowired
+    private RerankService rerankService;
+
     // =========================================================================
     // 公开入口
     // =========================================================================
@@ -76,6 +80,19 @@ public class HybridSearchService {
      * 带权限过滤的混合检索（主要入口）
      */
     public List<SearchResult> searchWithPermission(String query, String userId, int topK) {
+        return searchInternal(query, userId, topK, false).results();
+    }
+
+    /** 评测专用入口：与线上使用相同检索，仅额外记录同一轮阶段结果。 */
+    public SearchTrace searchWithPermissionTrace(String query, String userId, int topK) {
+        return searchInternal(query, userId, topK, true);
+    }
+
+    /** 执行权限检索，详细模式不会重复召回或重复调用排序模型。 */
+    private SearchTrace searchInternal(String query, String userId, int topK, boolean detailed) {
+        if (topK <= 0) {
+            return new SearchTrace(List.of(), List.of(), List.of(), "UNAVAILABLE", 0);
+        }
         long startTime = System.currentTimeMillis();
         logger.debug("混合检索开始，query={}, userId={}, topK={}", query, userId, topK);
 
@@ -102,15 +119,23 @@ public class HybridSearchService {
 
             // --- 3. RRF 融合 ---
             long rrfStart = System.currentTimeMillis();
-            List<SearchResult> merged = rrfMerge(bm25Results, knnResults, topK);
+            List<SearchResult> merged = rrfMerge(bm25Results, knnResults, rerankService.candidateLimit(topK));
             logger.info("步骤3-RRF融合耗时: {}ms, 融合后结果数={}", System.currentTimeMillis() - rrfStart, merged.size());
+
+            if (detailed) {
+                attachFileNames(merged);
+            }
+            List<SearchResult> candidates = detailed ? List.copyOf(merged) : List.of();
+            RerankService.Outcome outcome = rerankService.rerankWithTrace(query, merged, topK);
+            merged = outcome.results();
 
             long attachStart = System.currentTimeMillis();
             attachFileNames(merged);
             logger.info("步骤4-附加文件名耗时: {}ms", System.currentTimeMillis() - attachStart);
 
             logger.info("混合检索总耗时: {}ms, query={}", System.currentTimeMillis() - startTime, query);
-            return merged;
+            return new SearchTrace(merged, candidates, detailed ? outcome.ranked() : List.of(),
+                    outcome.status(), outcome.thresholdDroppedInTopK());
 
         } catch (Exception e) {
             logger.error("混合检索失败，尝试纯 BM25 降级", e);
@@ -121,10 +146,10 @@ public class HybridSearchService {
                 List<SearchResult> fallback = esBm25Search(query, userDbId, orgTags, topK);
                 attachFileNames(fallback);
                 logger.info("BM25降级搜索耗时: {}ms", System.currentTimeMillis() - fallbackStart);
-                return fallback;
+                return new SearchTrace(fallback, List.of(), List.of(), "RETRIEVAL_FALLBACK", 0);
             } catch (Exception fe) {
                 logger.error("降级搜索也失败", fe);
-                return Collections.emptyList();
+                return new SearchTrace(List.of(), List.of(), List.of(), "UNAVAILABLE", 0);
             }
         }
     }
@@ -135,6 +160,9 @@ public class HybridSearchService {
     public List<SearchResult> search(String query, int topK) {
         logger.warn("使用了无权限过滤的搜索方法，建议改用 searchWithPermission");
         try {
+            if (topK <= 0) {
+                return Collections.emptyList();
+            }
             int recallK = topK * 5;
 
             List<SearchResult> bm25Results = esBm25SearchNoAuth(query, recallK);
@@ -146,7 +174,9 @@ public class HybridSearchService {
                 knnResults = esKnnSearch(queryVec, "", Collections.emptyList(), recallK);
             }
 
-            return rrfMerge(bm25Results, knnResults, topK);
+            List<SearchResult> candidates = rrfMerge(
+                    bm25Results, knnResults, rerankService.candidateLimit(topK));
+            return rerankService.rerank(query, candidates, topK);
         } catch (Exception e) {
             logger.error("无权限搜索失败", e);
             return Collections.emptyList();
@@ -271,24 +301,24 @@ public class HybridSearchService {
 
             SearchResponse<EsDocument> response = esClient.search(s -> s
                     .index("knowledge_base")
-                    .query(q -> q.bool(b -> {
-                        // 权限过滤
-                        b.should(s1 -> s1.term(t -> t.field("userId").value(userDbId)));
-                        b.should(s2 -> s2.term(t -> t.field("public").value(true)));
-                        if (!orgTags.isEmpty()) {
-                            if (orgTags.size() == 1) {
-                                b.should(s3 -> s3.term(t -> t.field("orgTag").value(orgTags.get(0))));
-                            } else {
-                                b.should(s3 -> s3.bool(inner -> {
-                                    orgTags.forEach(tag -> inner.should(
-                                            sh -> sh.term(t -> t.field("orgTag").value(tag))));
-                                    return inner;
-                                }));
-                            }
-                        }
-                        return b.minimumShouldMatch("1");
-                    }))
                     .knn(k -> k
+                            .filter(q -> q.bool(b -> {
+                                // 权限过滤
+                                b.should(s1 -> s1.term(t -> t.field("userId").value(userDbId)));
+                                b.should(s2 -> s2.term(t -> t.field("public").value(true)));
+                                if (!orgTags.isEmpty()) {
+                                    if (orgTags.size() == 1) {
+                                        b.should(s3 -> s3.term(t -> t.field("orgTag").value(orgTags.get(0))));
+                                    } else {
+                                        b.should(s3 -> s3.bool(inner -> {
+                                            orgTags.forEach(tag -> inner.should(
+                                                    sh -> sh.term(t -> t.field("orgTag").value(tag))));
+                                            return inner;
+                                        }));
+                                    }
+                                }
+                                return b.minimumShouldMatch("1");
+                            }))
                             .field("vector")
                             .queryVector(queryVec)
                             .k(topK)
@@ -471,6 +501,12 @@ public class HybridSearchService {
     // =========================================================================
     // 内部类
     // =========================================================================
+
+    /** 同一轮 RRF 候选、模型全量排名及最终结果，供离线评测比较。 */
+    public record SearchTrace(List<SearchResult> results, List<SearchResult> candidates,
+                              List<SearchResult> reranked, String rerankStatus,
+                              int thresholdDroppedInTopK) {
+    }
 
     /**
      * ES KNN 检索结果（轻量级 DTO）

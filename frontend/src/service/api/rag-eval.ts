@@ -22,6 +22,15 @@ export interface EvalSummary {
   failedCases: number;
   needsHumanReviewCount: number;
   diagnosisCounts: Record<string, number>;
+  stages?: {
+    comparedCases: number;
+    rrfHitRate: number | null;
+    rrfMrr: number | null;
+    rerankHitRate: number | null;
+    rerankMrr: number | null;
+    regressedCases: number;
+    improvedCases: number;
+  } | null;
 }
 
 export interface EvalRun {
@@ -67,6 +76,21 @@ export interface EvalCaseResult {
   needsHumanReview: boolean;
   error: string | null;
   latencyMs: number;
+  stages?: {
+    candidateHit: boolean | null;
+    candidateCount: number;
+    thresholdDroppedInTopK: number;
+    candidates: RetrievedChunk[];
+    comparison?: {
+      rerankStatus: string;
+      rrfHit: boolean | null;
+      rrfFirstRank: number | null;
+      rerankHit: boolean | null;
+      rerankFirstRank: number | null;
+      change: string;
+      reranked: RetrievedChunk[];
+    } | null;
+  } | null;
 }
 
 export interface HumanReview {

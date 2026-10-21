@@ -3,6 +3,7 @@ package com.zzzzyj.smartpai.service.eval;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zzzzyj.smartpai.config.RagEvalProperties;
+import com.zzzzyj.smartpai.config.RerankProperties;
 import com.zzzzyj.smartpai.exception.CustomException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -58,6 +59,10 @@ public class RagEvalService {
     private final ExecutorService executor;
     private final Map<String, RunProgress> runs = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile RunProgress latest;
+
+    /** 记录精排配置，不把 API Key 写入报告。 */
+    @Autowired
+    private RerankProperties rerankProperties = new RerankProperties();
 
     @Autowired
     public RagEvalService(RagEvalCaseRunner caseRunner, RagEvalProperties properties, ObjectMapper objectMapper) {
@@ -315,12 +320,19 @@ public class RagEvalService {
         config.put("llm", caseRunner.primaryLlmDescription());
         config.put("generationMaxTokens", properties.getGenerationMaxTokens());
         config.put("judgeMaxTokens", properties.getJudgeMaxTokens());
-        config.put("retrievalPipeline", "BM25 + KNN + RRF");
+        config.put("retrievalPipeline", rerankProperties.isEnabled()
+                ? "BM25 + KNN + RRF + RERANK" : "BM25 + KNN + RRF");
+        config.put("rerankEnabled", rerankProperties.isEnabled());
+        config.put("rerankModel", rerankProperties.getModel());
+        config.put("rerankMaxCandidates", rerankProperties.getMaxCandidates());
+        config.put("rerankScoreThreshold", rerankProperties.getScoreThreshold());
+        config.put("rerankMaxDocumentChars", rerankProperties.getMaxDocumentChars());
+        config.put("rerankTimeoutSeconds", rerankProperties.getTimeoutSeconds());
         config.put("rrfK", 60);
         config.put("recallMultiplier", 10);
         config.put("parentContextEnabled", false);
         config.put("contextualRetrievalEnabled", false);
-        config.put("stageMetricsAvailable", false);
+        config.put("stageMetricsAvailable", true);
         config.put("humanReviewSampleRate", properties.getHumanReviewSampleRate());
         config.put("randomSeed", properties.getRandomSeed());
         return config;

@@ -82,6 +82,18 @@ public record EvalReport(
                                Double meanPrecisionAtK,
                                Double meanIrrelevantInTopK,
                                int unlabeledCases,
-                               Double unlabeledMeanReturned) {
+                               Double unlabeledMeanReturned,
+                               int comparedCases, Double rrfHitRate, Double rrfMrr,
+                               Double rerankHitRate, Double rerankMrr,
+                               int regressedCases, int improvedCases) {
+        /** 兼容旧阶段汇总。 */
+        public StageSummary(int stagedCases, Double candidateRecall, Double meanNdcgAtK, int ndcgCases,
+                            Double bm25Recall, Double knnRecall, int thresholdDroppedCases,
+                            int thresholdDroppedResults, Double meanPrecisionAtK, Double meanIrrelevantInTopK,
+                            int unlabeledCases, Double unlabeledMeanReturned) {
+            this(stagedCases, candidateRecall, meanNdcgAtK, ndcgCases, bm25Recall, knnRecall,
+                    thresholdDroppedCases, thresholdDroppedResults, meanPrecisionAtK, meanIrrelevantInTopK,
+                    unlabeledCases, unlabeledMeanReturned, 0, null, null, null, null, 0, 0);
+        }
     }
 }

@@ -43,6 +43,11 @@ class RagEvalCaseRunnerTest {
 
     @BeforeEach
     void setUp() {
+        when(searchService.searchWithPermissionTrace(anyString(), anyString(), anyInt())).thenAnswer(invocation -> {
+            List<SearchResult> results = searchService.searchWithPermission(
+                    invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2));
+            return new HybridSearchService.SearchTrace(results, List.of(), List.of(), "UNAVAILABLE", 0);
+        });
         runner = new RagEvalCaseRunner(searchService, router,
                 properties, objectMapper, Runnable::run);
         when(router.buildRagMessages(anyString(), anyString()))
@@ -88,6 +93,80 @@ class RagEvalCaseRunnerTest {
         assertEquals("端口？", payload.get("question").asText());
         assertEquals("8080", payload.get("reference_answer").asText());
         assertEquals(2, payload.get("evidence").size());
+    }
+
+    @Test
+    void retrievalOnlyRecordsRerankedOrderAndScores() {
+        SearchResult relevant = result("m1", "config.pdf", "RERANK");
+        relevant.setScore(0.93);
+        when(searchService.searchWithPermission("端口？", "7", 3)).thenReturn(List.of(relevant));
+
+        EvalCaseResult report = runner.run(evalCase(List.of("m1")), "7", 3, noSampling, true);
+
+        verify(searchService).searchWithPermission("端口？", "7", 3);
+        assertEquals("RERANK", report.retrievalMode());
+        assertEquals(0.93, report.retrieved().get(0).score());
+        assertEquals(1, report.firstRelevantRank());
+        assertEquals(1d, report.reciprocalRank());
+        assertEquals(1, report.retrieved().size());
+        assertTrue(llmCalls.isEmpty());
+    }
+
+    @Test
+    void sameCandidatesExposeRerankRegression() {
+        SearchResult relevant = result("m1", "config.pdf", "RRF");
+        SearchResult other = result("other", "x.pdf", "RRF");
+        org.mockito.Mockito.doReturn(new HybridSearchService.SearchTrace(List.of(other), List.of(relevant, other),
+                List.of(other, relevant), "SUCCESS", 0))
+                .when(searchService).searchWithPermissionTrace("端口？", "7", 1);
+        EvalCaseResult report = runner.run(evalCase(List.of("m1")), "7", 1, noSampling, true);
+        assertTrue(report.stages().candidateHit());
+        assertTrue(report.stages().comparison().rrfHit());
+        assertFalse(report.stages().comparison().rerankHit());
+        assertEquals("REGRESSED", report.stages().comparison().change());
+        assertEquals(2, report.stages().comparison().reranked().size());
+        assertEquals(1, report.stages().candidates().get(0).rank());
+        EvalReport.StageSummary summary = EvalReportAggregator.summarize(List.of(report)).stages();
+        assertEquals(1, summary.comparedCases());
+        assertEquals(1d, summary.rrfHitRate());
+        assertEquals(0d, summary.rerankHitRate());
+        assertEquals(1, summary.regressedCases());
+    }
+
+    @Test
+    void thresholdFilteringDoesNotLookLikeRankingRegression() {
+        SearchResult relevant = result("m1", "config.pdf", "RRF");
+        org.mockito.Mockito.doReturn(new HybridSearchService.SearchTrace(List.of(), List.of(relevant),
+                List.of(relevant), "SUCCESS", 1))
+                .when(searchService).searchWithPermissionTrace("端口？", "7", 1);
+        EvalCaseResult report = runner.run(evalCase(List.of("m1")), "7", 1, noSampling, true);
+        assertFalse(report.retrievalHit());
+        assertTrue(report.stages().comparison().rerankHit());
+        assertEquals("UNCHANGED", report.stages().comparison().change());
+        assertEquals(1, report.stages().thresholdDroppedInTopK());
+    }
+
+    @Test
+    void failedRerankIsExcludedFromModelComparison() {
+        SearchResult relevant = result("m1", "config.pdf", "RRF");
+        org.mockito.Mockito.doReturn(new HybridSearchService.SearchTrace(List.of(relevant), List.of(relevant),
+                List.of(), "FAILED", 0))
+                .when(searchService).searchWithPermissionTrace("端口？", "7", 1);
+        EvalCaseResult report = runner.run(evalCase(List.of("m1")), "7", 1, noSampling, true);
+        assertTrue(report.retrievalHit());
+        assertNull(report.stages().comparison().rerankHit());
+        assertEquals(0, EvalReportAggregator.summarize(List.of(report)).stages().comparedCases());
+    }
+
+    @Test
+    void missingEvidenceInCandidatesIsRecallProblem() {
+        SearchResult other = result("other", "x.pdf", "RRF");
+        org.mockito.Mockito.doReturn(new HybridSearchService.SearchTrace(List.of(other), List.of(other),
+                List.of(other), "SUCCESS", 0))
+                .when(searchService).searchWithPermissionTrace("端口？", "7", 1);
+        EvalCaseResult report = runner.run(evalCase(List.of("m1")), "7", 1, noSampling, true);
+        assertFalse(report.stages().candidateHit());
+        assertEquals("CANDIDATE_MISS", report.stages().comparison().change());
     }
 
     @Test

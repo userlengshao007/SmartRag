@@ -32,6 +32,13 @@ public final class EvalReportAggregator {
         int review = 0;
         int failed = 0;
         Map<String, Long> modes = new TreeMap<>();
+        int compared = 0;
+        int rrfHits = 0;
+        int rerankHits = 0;
+        int regressed = 0;
+        int improved = 0;
+        double rrfRr = 0d;
+        double rerankRr = 0d;
         int staged = 0;
         int candidateHits = 0;
         int ndcgCases = 0;
@@ -72,6 +79,16 @@ public final class EvalReportAggregator {
             modes.merge(result.retrievalMode() == null ? "NONE" : result.retrievalMode(), 1L, Long::sum);
             EvalCaseResult.Stages stages = result.stages();
             if (stages != null) {
+                EvalCaseResult.Comparison comparison = stages.comparison();
+                if (comparison != null && comparison.rerankHit() != null) {
+                    compared++;
+                    rrfHits += Boolean.TRUE.equals(comparison.rrfHit()) ? 1 : 0;
+                    rerankHits += comparison.rerankHit() ? 1 : 0;
+                    rrfRr += comparison.rrfReciprocalRank();
+                    rerankRr += comparison.rerankReciprocalRank();
+                    regressed += "REGRESSED".equals(comparison.change()) ? 1 : 0;
+                    improved += "IMPROVED".equals(comparison.change()) ? 1 : 0;
+                }
                 droppedCases += stages.thresholdDroppedInTopK() > 0 ? 1 : 0;
                 droppedResults += stages.thresholdDroppedInTopK();
                 if (stages.candidateHit() == null) {
@@ -96,9 +113,13 @@ public final class EvalReportAggregator {
         }
         EvalReport.StageSummary stageSummary = staged == 0 && unlabeled == 0 ? null
                 : new EvalReport.StageSummary(staged, ratio(candidateHits, staged), ratio(ndcgSum, ndcgCases), ndcgCases,
-                ratio(bm25Hits, staged), ratio(knnHits, staged), droppedCases, droppedResults,
+                results.stream().anyMatch(r -> r.stages() != null && r.stages().bm25Hit() != null)
+                        ? ratio(bm25Hits, staged) : null,
+                results.stream().anyMatch(r -> r.stages() != null && r.stages().knnHit() != null)
+                        ? ratio(knnHits, staged) : null, droppedCases, droppedResults,
                 ratio(precisionSum, precisionCases), ratio(irrelevantSum, staged), unlabeled,
-                ratio(unlabeledReturned, unlabeled));
+                ratio(unlabeledReturned, unlabeled), compared, ratio(rrfHits, compared), ratio(rrfRr, compared),
+                ratio(rerankHits, compared), ratio(rerankRr, compared), regressed, improved);
 
         return new EvalReport.EvalSummary(
                 results.size(),

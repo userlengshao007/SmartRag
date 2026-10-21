@@ -273,3 +273,15 @@ eval:
   generation-timeout-seconds: 90
   judge-timeout-seconds: 60
   requester-id: system-eval
+
+# RRF 融合后精排；失败时沿用 RRF 前 topK，低分过滤为空时不回退。
+search:
+  rerank:
+    enabled: ${SEARCH_RERANK_ENABLED:true}
+    url: ${SEARCH_RERANK_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
+    model: ${SEARCH_RERANK_MODEL:qwen3-rerank}
+    api-key: ${SEARCH_RERANK_API_KEY:}
+    max-candidates: ${SEARCH_RERANK_MAX_CANDIDATES:50}
+    score-threshold: ${SEARCH_RERANK_SCORE_THRESHOLD:0}
+    max-document-chars: ${SEARCH_RERANK_MAX_DOCUMENT_CHARS:2000}
+    timeout-seconds: ${SEARCH_RERANK_TIMEOUT_SECONDS:10}

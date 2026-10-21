@@ -44,9 +44,21 @@ const labeledCount = computed(
 const progress = computed(() =>
   Math.round((100 * (selected.value?.completedCases ?? 0)) / Math.max(selected.value?.totalCases ?? 1, 1))
 );
+const stageLabels: Record<string, string> = {
+  REGRESSED: '精排后丢失命中',
+  IMPROVED: '精排后新增命中',
+  CANDIDATE_MISS: '候选阶段未命中',
+  UNCHANGED: '命中状态不变',
+  FAILED: '模型失败，回退 RRF',
+  DISABLED: '未启用精排',
+  EMPTY: '无候选',
+  UNLABELED: '未标注证据'
+};
 const filterOptions = [
   { label: '全部题目', value: 'all' },
   { label: '检索未命中', value: 'miss' },
+  { label: '精排后丢失命中', value: 'regressed' },
+  { label: '候选未命中', value: 'candidate-miss' },
   { label: '回答错误', value: 'wrong' },
   { label: '待人工复核', value: 'review' },
   { label: '调用异常', value: 'error' }
@@ -70,6 +82,8 @@ const filteredCases = computed(() =>
     const state =
       filter.value === 'all' ||
       (filter.value === 'miss' && item.retrievalHit === false) ||
+      (filter.value === 'regressed' && item.stages?.comparison?.change === 'REGRESSED') ||
+      (filter.value === 'candidate-miss' && item.stages?.comparison?.change === 'CANDIDATE_MISS') ||
       (filter.value === 'wrong' && item.judgeCorrect === false) ||
       (filter.value === 'review' && item.needsHumanReview && !reviewMap.value.has(item.caseId)) ||
       (filter.value === 'error' && Boolean(item.error));
@@ -479,6 +493,13 @@ onBeforeUnmount(() => {
                 <p>对照参考答案，判断核心结论是否正确。</p>
               </div>
             </div>
+            <NAlert v-if="summary?.stages?.comparedCases" type="info" :show-icon="false">
+              同一轮候选对比（{{ summary.stages.comparedCases }} 道标注且精排成功的题）： RRF 命中率
+              {{ percent(summary.stages.rrfHitRate) }} → 精排 {{ percent(summary.stages.rerankHitRate) }}； MRR
+              {{ summary.stages.rrfMrr?.toFixed(3) }} → {{ summary.stages.rerankMrr?.toFixed(3) }}。 新增命中
+              {{ summary.stages.improvedCases }} 题，丢失命中 {{ summary.stages.regressedCases }} 题。
+              精排名次按阈值过滤前计算，上方检索命中率按过滤后的最终结果计算。
+            </NAlert>
             <div v-if="summary" class="secondary-metrics">
               <span>
                 MRR
@@ -618,6 +639,40 @@ onBeforeUnmount(() => {
           <NSpace>
             <NTag v-for="text in activeCase.expectedEvidence" :key="text" size="small">{{ text }}</NTag>
           </NSpace>
+        </section>
+        <section v-if="activeCase.stages?.comparison" class="detail-section">
+          <h3>同一轮排序对比</h3>
+          <p>{{ stageLabels[activeCase.stages.comparison.change] || activeCase.stages.comparison.change }}</p>
+          <p>
+            候选 {{ activeCase.stages.candidateCount }} 条； RRF 首个正确证据排名
+            {{ activeCase.stages.comparison.rrfFirstRank ?? '前 K 未命中' }}； 精排首个正确证据排名
+            {{ activeCase.stages.comparison.rerankFirstRank ?? '前 K 未命中或未精排' }}； 阈值过滤前 K 中
+            {{ activeCase.stages.thresholdDroppedInTopK }} 条。
+          </p>
+          <details>
+            <summary>RRF 全部候选（按原排名）</summary>
+            <div
+              v-for="chunk in activeCase.stages.candidates"
+              :key="`${chunk.fileMd5}-${chunk.chunkId}`"
+              class="evidence-block"
+            >
+              <strong>#{{ chunk.rank }} {{ chunk.fileName || chunk.fileMd5 }} · 分块 {{ chunk.chunkId }}</strong>
+              <p>RRF 分 {{ chunk.score?.toFixed(4) }} · {{ chunk.relevant ? '匹配标注' : '未匹配标注' }}</p>
+              <p class="text-block">{{ chunk.textContent }}</p>
+            </div>
+          </details>
+          <details>
+            <summary>精排全部候选（过滤前）</summary>
+            <div
+              v-for="chunk in activeCase.stages.comparison.reranked"
+              :key="`${chunk.fileMd5}-${chunk.chunkId}`"
+              class="evidence-block"
+            >
+              <strong>#{{ chunk.rank }} {{ chunk.fileName || chunk.fileMd5 }} · 分块 {{ chunk.chunkId }}</strong>
+              <p>相关性 {{ chunk.score?.toFixed(4) }} · {{ chunk.relevant ? '匹配标注' : '未匹配标注' }}</p>
+              <p class="text-block">{{ chunk.textContent }}</p>
+            </div>
+          </details>
         </section>
         <section class="detail-section">
           <h3>实际检索结果 · {{ activeCase.retrieved.length }} 条</h3>

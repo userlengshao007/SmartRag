@@ -76,8 +76,10 @@ public class RagEvalCaseRunner {
         Draft draft = new Draft(evalCase);
 
         List<SearchResult> results;
+        HybridSearchService.SearchTrace trace;
         try {
-            List<SearchResult> raw = hybridSearchService.searchWithPermission(evalCase.question(), searchUserId, topK);
+            trace = hybridSearchService.searchWithPermissionTrace(evalCase.question(), searchUserId, topK);
+            List<SearchResult> raw = trace.results();
             results = raw == null ? List.of() : raw.subList(0, Math.min(raw.size(), topK));
         } catch (Exception e) {
             logger.warn("评测用例检索失败: case={}, error={}", evalCase.id(), e.getMessage());
@@ -86,6 +88,7 @@ public class RagEvalCaseRunner {
             return draft.build(sampler.decide(false), System.currentTimeMillis() - start);
         }
         recordRetrieval(draft, evalCase, results, topK);
+        recordStages(draft, evalCase, trace, results, topK);
         if (retrievalOnly) {
             return draft.build(null, System.currentTimeMillis() - start);
         }
@@ -129,6 +132,52 @@ public class RagEvalCaseRunner {
         draft.firstRelevantRank = rank > 0 ? rank : null;
         draft.reciprocalRank = RetrievalMetrics.reciprocalRank(rank);
         draft.expectedDocCoverage = RetrievalMetrics.expectedDocCoverage(results, evalCase, topK);
+    }
+
+    /** 在同一次召回上计算 RRF 前 topK 与模型前 topK，区分召回丢失和精排退步。 */
+    private void recordStages(Draft draft, EvalCase evalCase, HybridSearchService.SearchTrace trace,
+                              List<SearchResult> results, int topK) {
+        if ("UNAVAILABLE".equals(trace.rerankStatus()) || "RETRIEVAL_FALLBACK".equals(trace.rerankStatus())) {
+            return;
+        }
+        boolean labeled = evalCase.hasExpectedDocs();
+        int candidateRank = RetrievalMetrics.firstRelevantRank(trace.candidates(), evalCase, trace.candidates().size());
+        int relevant = RetrievalMetrics.countRelevant(trace.candidates(), evalCase);
+        int rrfRank = RetrievalMetrics.firstRelevantRank(trace.candidates(), evalCase, topK);
+        boolean success = "SUCCESS".equals(trace.rerankStatus());
+        int rerankRank = RetrievalMetrics.firstRelevantRank(trace.reranked(), evalCase, topK);
+        String change = !success ? trace.rerankStatus() : !labeled ? "UNLABELED"
+                : candidateRank == 0 ? "CANDIDATE_MISS"
+                : rrfRank > 0 && rerankRank == 0 ? "REGRESSED"
+                : rrfRank == 0 && rerankRank > 0 ? "IMPROVED" : "UNCHANGED";
+        EvalCaseResult.Comparison comparison = new EvalCaseResult.Comparison(trace.rerankStatus(),
+                labeled ? rrfRank > 0 : null, labeled && rrfRank > 0 ? rrfRank : null,
+                labeled ? RetrievalMetrics.reciprocalRank(rrfRank) : null,
+                labeled && success ? rerankRank > 0 : null,
+                labeled && success && rerankRank > 0 ? rerankRank : null,
+                labeled && success ? RetrievalMetrics.reciprocalRank(rerankRank) : null,
+                change, stageChunks(trace.reranked(), evalCase));
+        int returnedRelevant = RetrievalMetrics.countRelevant(results, evalCase);
+        draft.stages = new EvalCaseResult.Stages(labeled ? candidateRank > 0 : null,
+                trace.candidates().size(), labeled ? relevant : null,
+                labeled ? RetrievalMetrics.ndcg(results, evalCase, topK, relevant) : null,
+                null, null, null, null, trace.thresholdDroppedInTopK(),
+                labeled && !results.isEmpty() ? (double) returnedRelevant / results.size() : null,
+                labeled ? results.size() - returnedRelevant : 0, results.size(),
+                stageChunks(trace.candidates(), evalCase), comparison);
+    }
+
+    /** 阶段证据保留全文，便于检查模型输入与证据短语；不把裁剪文本当作原始正文。 */
+    private List<EvalCaseResult.RetrievedChunk> stageChunks(List<SearchResult> results, EvalCase evalCase) {
+        List<EvalCaseResult.RetrievedChunk> chunks = new ArrayList<>();
+        for (int i = 0; i < results.size(); i++) {
+            SearchResult result = results.get(i);
+            chunks.add(new EvalCaseResult.RetrievedChunk(i + 1, result.getFileMd5(), result.getFileName(),
+                    result.getChunkId(), result.getScore(), result.getScore(),
+                    evalCase.hasExpectedDocs() && RetrievalMetrics.isRelevant(result, evalCase),
+                    result.getTextContent(), result.getPageNumber()));
+        }
+        return List.copyOf(chunks);
     }
 
     /**
