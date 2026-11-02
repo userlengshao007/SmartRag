@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import com.zzzzyj.smartpai.service.conflict.DocumentVectorizedEvent;
 
 import java.io.*;
 import java.net.HttpURLConnection;
@@ -21,6 +23,18 @@ import java.security.NoSuchAlgorithmException;
 @Service
 @Slf4j
 public class FileProcessingConsumer {
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
+    /** 发布后置任务通知，失败不回滚已完成的文件处理。 */
+    private void publishVectorized(String fileMd5) {
+        try {
+            eventPublisher.publishEvent(new DocumentVectorizedEvent(fileMd5));
+        } catch (Exception exception) {
+            log.warn("发布冲突检测事件失败: fileMd5={}", fileMd5, exception);
+        }
+    }
 
     private final ParseService parseService;
     private final VectorizationService vectorizationService;
@@ -79,6 +93,7 @@ public class FileProcessingConsumer {
                     task.getUserId()
             );
             updateActualEmbeddingUsage(task, vectorizationResult);
+            publishVectorized(task.getFileMd5());
             log.info("步骤3-向量化处理耗时: {}ms, fileMd5: {}", System.currentTimeMillis() - step3Start, task.getFileMd5());
             log.info("向量化完成，fileMd5: {}", task.getFileMd5());
             

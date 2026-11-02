@@ -31,4 +31,17 @@ public class AsyncExecutorConfig {
         executor.initialize();
         return executor;
     }
+    /** 隔离文档冲突扫描，限制并发和排队长度。 */
+    @Bean(name = "conflictDetectionExecutor")
+    public ThreadPoolTaskExecutor conflictDetectionExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("document-conflict-");
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(100);
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        executor.initialize();
+        return executor;
+    }
 }

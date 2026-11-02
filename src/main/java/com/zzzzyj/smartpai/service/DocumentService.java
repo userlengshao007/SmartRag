@@ -18,6 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import com.zzzzyj.smartpai.service.conflict.DocumentVectorizedEvent;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -39,6 +41,18 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class DocumentService {
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
+    /** 发布后置任务通知，失败不回滚已完成的文件处理。 */
+    private void publishVectorized(String fileMd5) {
+        try {
+            eventPublisher.publishEvent(new DocumentVectorizedEvent(fileMd5));
+        } catch (Exception exception) {
+            logger.warn("发布冲突检测事件失败: fileMd5={}", fileMd5, exception);
+        }
+    }
 
     public record PdfSinglePagePreview(byte[] content, boolean cacheHit) {}
     private record InMemoryPdfPreviewCache(byte[] content, long expiresAtMillis) {}
@@ -110,7 +124,7 @@ public class DocumentService {
                 logger.info("成功从Elasticsearch删除文档: {}", fileMd5);
             } catch (Exception e) {
                 logger.error("从Elasticsearch删除文档时出错: {}", fileMd5, e);
-                // 继续删除其他数据
+                throw new RuntimeException("删除文档索引失败，请重试", e);
             }
 
             // 2. 删除Milvus中的向量数据；失败时写入补偿表，由定时任务异步重试
@@ -226,6 +240,7 @@ public class DocumentService {
             fileUpload.setActualEmbeddingTokens((long) result.actualEmbeddingTokens());
             fileUpload.setActualChunkCount(result.actualChunkCount());
             fileUploadRepository.save(fileUpload);
+            publishVectorized(fileMd5);
 
             logger.info(
                     "文档索引重建完成: fileMd5={}, actualTokens={}, actualChunkCount={}",

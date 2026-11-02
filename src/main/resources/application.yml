@@ -135,6 +135,25 @@ file:
     semantic-similarity-threshold: 0.75  # Embedding 相似度阈值（用于语义连贯性检测）
 
 knowledge:
+  # 文档冲突检测：新文件向量化完成后异步扫描，相似度高但数字 / 版本号 / 日期不同的分块对记为疑似冲突
+  # 只记录不处理，管理员通过 /api/v1/admin/document-conflicts 人工决定保留哪一篇
+  conflict:
+    enabled: ${KNOWLEDGE_CONFLICT_ENABLED:true}
+    # 分块向量余弦相似度阈值
+    similarity-threshold: ${KNOWLEDGE_CONFLICT_SIMILARITY_THRESHOLD:0.9}
+    # 数字 / 版本号 / 日期替换成占位符后的文本相似度阈值（字符二元组 Dice）
+    masked-text-similarity-threshold: ${KNOWLEDGE_CONFLICT_MASKED_SIMILARITY_THRESHOLD:0.8}
+    max-chunks-per-file: ${KNOWLEDGE_CONFLICT_MAX_CHUNKS_PER_FILE:200}
+    neighbors-per-chunk: ${KNOWLEDGE_CONFLICT_NEIGHBORS_PER_CHUNK:3}
+    max-conflicts-per-file: ${KNOWLEDGE_CONFLICT_MAX_CONFLICTS_PER_FILE:50}
+    snippet-chars: 300
+    llm-confirm:
+      # 规则候选每批最多 8 对交给 LLM 确认，失败时保留规则结果
+      enabled: ${KNOWLEDGE_CONFLICT_LLM_CONFIRM_ENABLED:false}
+      max-chunk-chars: 800
+      max-completion-tokens: 800
+      requester-id: system-conflict
+
   bootstrap:
     enabled: ${KNOWLEDGE_BOOTSTRAP_ENABLED:true}
     path: ${KNOWLEDGE_BOOTSTRAP_PATH:docs/smartrag.pdf}

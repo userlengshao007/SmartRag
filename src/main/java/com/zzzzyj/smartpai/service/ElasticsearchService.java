@@ -78,8 +78,12 @@ public class ElasticsearchService {
             DeleteByQueryRequest request = DeleteByQueryRequest.of(d -> d
                     .index("knowledge_base")
                     .query(q -> q.term(t -> t.field("fileMd5").value(fileMd5)))
+                    .refresh(true)
             );
-            esClient.deleteByQuery(request);
+            var response = esClient.deleteByQuery(request);
+            if (response.timedOut() || !response.failures().isEmpty() || response.versionConflicts() > 0) {
+                throw new IllegalStateException("索引删除未全部完成");
+            }
         } catch (Exception e) {
             throw new RuntimeException("删除文档失败", e);
         }

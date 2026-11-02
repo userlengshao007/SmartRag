@@ -8,6 +8,9 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
 import UploadDialog from './modules/upload-dialog.vue';
 import SearchDialog from './modules/search-dialog.vue';
+import ConflictDialog from './modules/conflict-dialog.vue';
+
+const conflictVisible = ref(false);
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -505,6 +508,7 @@ async function onBeforeUpload(
       <template #header-extra>
         <TableHeaderOperation v-model:columns="columnChecks" :loading="loading" @add="handleUpload" @refresh="getList">
           <template #prefix>
+            <NButton v-if="authStore.isAdmin" size="small" @click="conflictVisible = true">文档冲突</NButton>
             <NButton size="small" ghost type="primary" @click="handleSearch">
               <template #icon>
                 <icon-ic-round-search class="text-icon" />
@@ -530,6 +534,7 @@ async function onBeforeUpload(
     </NCard>
     <UploadDialog v-model:visible="uploadVisible" />
     <SearchDialog v-model:visible="searchVisible" />
+    <ConflictDialog v-if="authStore.isAdmin" v-model:visible="conflictVisible" @resolved="getList" />
 
     <!-- 文件预览弹窗 -->
     <NModal v-model:show="previewVisible" class="document-preview-modal" :auto-focus="false">
