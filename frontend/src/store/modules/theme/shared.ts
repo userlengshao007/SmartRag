@@ -245,13 +245,13 @@ export function getNaiveTheme(colors: App.Theme.ThemeColor, recommended = false)
   const theme: GlobalThemeOverrides = {
     common: {
       ...getNaiveThemeColors(colors, recommended),
-      borderRadius: '6px'
+      borderRadius: '10px'
     },
     LoadingBar: {
       colorLoading
     },
     Tag: {
-      borderRadius: '6px'
+      borderRadius: '10px'
     }
   };
 

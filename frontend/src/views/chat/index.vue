@@ -17,7 +17,7 @@ const sidebarCollapsed = ref(false);
   </div>
   <div v-else class="h-full bg-layout p-3 pt-6">
     <div
-      class="h-full flex overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_28px_rgba(15,23,42,0.06)] dark:bg-[#1c1c1c] dark:shadow-[0_1px_2px_rgba(0,0,0,0.5),0_8px_28px_rgba(0,0,0,0.3)]"
+      class="chat-workspace h-full flex overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_28px_rgba(15,23,42,0.06)] dark:bg-[#1c1c1c] dark:shadow-[0_1px_2px_rgba(0,0,0,0.5),0_8px_28px_rgba(0,0,0,0.3)]"
     >
       <ConversationSidebar v-model:collapsed="sidebarCollapsed" />
       <div class="relative min-w-0 flex flex-col flex-1">
@@ -36,4 +36,13 @@ const sidebarCollapsed = ref(false);
   </div>
 </template>
 
-<style scoped></style>
+<style scoped>
+.chat-workspace {
+  border: 1px solid rgb(var(--primary-color) / 0.12);
+  box-shadow: 0 8px 32px rgb(var(--primary-color) / 0.04);
+}
+.chat-workspace :deep(.chat-input-shell) {
+  border: 1px solid rgb(var(--primary-color) / 0.2);
+  box-shadow: 0 4px 20px rgb(var(--primary-color) / 0.04);
+}
+</style>

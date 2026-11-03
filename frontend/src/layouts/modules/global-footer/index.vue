@@ -7,7 +7,7 @@ defineOptions({
 <template>
   <DarkModeContainer class="h-full flex-center">
     <a href="https://github.com/zzzzyj/SmartRag.git" target="_blank" rel="noopener noreferrer">
-      Copyright MIT © 2025 SmartRag
+      Copyright MIT © 2025 SmartRAG
     </a>
   </DarkModeContainer>
 </template>

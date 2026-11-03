@@ -7,7 +7,7 @@ import systemLogo from '@/assets/svg-icon/logo.svg?raw';
 import { $t } from '@/locales';
 
 export function setupLoading() {
-  const themeColor = localStg.get('themeColor') || '#646cff';
+  const themeColor = localStg.get('themeColor') || '#117568';
   const darkMode = localStg.get('darkMode') || false;
   const { r, g, b } = getRgb(themeColor);
 

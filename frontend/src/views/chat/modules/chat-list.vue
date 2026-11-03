@@ -73,7 +73,7 @@ const showEmpty = computed(() => !loading.value && list.value.length === 0);
 
 <template>
   <Suspense>
-    <div class="flex h-0 flex-1 flex-col">
+    <div class="h-0 flex flex-col flex-1">
       <!-- Date filter in header -->
       <Teleport defer to="#header-extra">
         <div v-if="!showEmpty" class="flex items-center px-4">
@@ -86,22 +86,20 @@ const showEmpty = computed(() => !loading.value && list.value.length === 0);
       </Teleport>
 
       <!-- Empty state -->
-      <div v-if="showEmpty" class="flex flex-1 flex-col items-center justify-center gap-4">
-        <div class="flex h-20 w-20 items-center justify-center rounded-2xl bg-[rgb(var(--primary-color)/0.08)]">
-          <icon-material-symbols:chat-outline-rounded class="text-36px text-[rgb(var(--primary-color)/0.5)]" />
+      <div v-if="showEmpty" class="flex flex-col flex-1 items-center justify-center gap-4">
+        <div class="h-20 w-20 flex items-center justify-center rounded-2xl bg-[rgb(var(--primary-color)/0.08)]">
+          <SystemLogo class="text-48px text-primary" />
         </div>
-        <div class="text-15px font-500 color-#aaa">
-          {{ conversationId ? '开始新对话' : '选择或创建一个对话' }}
+        <div class="text-15px color-#aaa font-500">
+          {{ conversationId ? '今天，想探索什么？' : '在这里，让知识成为答案' }}
         </div>
-        <div class="text-12px color-#bbb">
-          在左侧选择一个对话，或点击「新对话」开始
-        </div>
+        <div class="text-12px color-#bbb">选择一个对话，或创建新对话，开始与知识交流</div>
       </div>
 
       <!-- Message list -->
       <NScrollbar v-else ref="scrollbarRef" class="flex-1">
         <NSpin :show="loading">
-          <div class="mx-auto w-full max-w-[960px] px-4">
+          <div class="mx-auto max-w-[960px] w-full px-4">
             <VueMarkdownItProvider>
               <ChatMessage
                 v-for="(item, index) in list"

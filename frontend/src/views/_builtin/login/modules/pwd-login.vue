@@ -59,13 +59,16 @@ async function handleSubmit() {
     localStg.remove('rememberedLogin');
   }
 }
-
 </script>
 
 <template>
   <NForm ref="formRef" :model="model" :rules="rules" size="large" :show-label="false" @keyup.enter="handleSubmit">
     <NFormItem path="userName">
-      <NInput v-model:value="model.userName" :placeholder="$t('page.login.common.userNamePlaceholder')">
+      <NInput
+        v-model:value="model.userName"
+        :input-props="{ name: 'username', autocomplete: 'username', 'aria-label': '用户名' }"
+        :placeholder="$t('page.login.common.userNamePlaceholder')"
+      >
         <template #prefix>
           <icon-ant-design:user-outlined />
         </template>
@@ -75,6 +78,7 @@ async function handleSubmit() {
       <NInput
         v-model:value="model.password"
         type="password"
+        :input-props="{ name: 'password', autocomplete: 'current-password', 'aria-label': '密码' }"
         show-password-on="click"
         :placeholder="$t('page.login.common.passwordPlaceholder')"
       >
@@ -89,7 +93,7 @@ async function handleSubmit() {
       </NCheckbox>
     </div>
     <div class="flex-col gap-6">
-      <NButton type="primary" size="large" round block :loading="authStore.loginLoading" @click="handleSubmit">
+      <NButton type="primary" size="large" block :loading="authStore.loginLoading" @click="handleSubmit">
         {{ $t('page.login.common.login') }}
       </NButton>
       <NButton block @click="toggleLoginModule('register')">
